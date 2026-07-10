@@ -136,7 +136,7 @@ public enum Defaults {
                             category: .outcome, symbol: "heart.fill", isBuiltIn: true),
 
             // Non-defib shock modalities — leaves of the SHOCK bloom.
-            EventDefinition(id: "shock.sync", title: "Sync cardioversion",
+            EventDefinition(id: "shock.sync", title: "Cardioversion",
                             category: .defibrillation, symbol: "bolt.circle.fill", isBuiltIn: true),
             EventDefinition(id: "shock.pace", title: "Pacing started",
                             category: .defibrillation, symbol: "waveform.circle.fill", isBuiltIn: true),

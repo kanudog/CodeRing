@@ -69,6 +69,16 @@ public func crOffset(_ seconds: Int) -> String {
     return String(format: "+%d:%02d", t / 60, t % 60)
 }
 
+/// Gutter-chip abbreviation for a logged med: clinical shorthand where one
+/// exists, the whole first word when it's short enough to just say it
+/// ("BLOOD"), otherwise the first three letters ("EPI").
+public func crChipAbbreviation(key: String, title: String) -> String {
+    let shorthand: [String: String] = ["rosc.bolus": "IVF"]
+    if let s = shorthand[key] { return s }
+    let firstWord = title.split(separator: " ").first.map(String.init) ?? title
+    return (firstWord.count <= 5 ? firstWord : String(firstWord.prefix(3))).uppercased()
+}
+
 /// Signed mm:ss — negatives keep their minus so overdue timers can count up
 /// past zero (e.g. "-0:23" = 23 s past the pulse-check deadline).
 public func crClockSigned(_ interval: TimeInterval) -> String {

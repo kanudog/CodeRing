@@ -59,16 +59,17 @@ struct HomeView: View {
                 // Settings tucked under its lower corners (drawn first, so
                 // the big button overlaps them slightly).
                 ZStack {
-                    // ±42 keeps the labels clear of the display's corner curve.
+                    // ±42 keeps the labels clear of the display's corner
+                    // curve; y 46 gives the big button real breathing room.
                     orbitButton(symbol: "clock.arrow.circlepath", title: "Recent") {
                         WatchSessionsList()
                     }
-                    .offset(x: -42, y: 30)
+                    .offset(x: -42, y: 50)
 
                     orbitButton(symbol: "gearshape.fill", title: "Settings") {
                         WatchSettingsView()
                     }
-                    .offset(x: 42, y: 30)
+                    .offset(x: 42, y: 50)
 
                     Button(action: startAction) {
                         ZStack {
@@ -89,9 +90,9 @@ struct HomeView: View {
                         .frame(width: 100, height: 100)
                     }
                     .buttonStyle(.plain)
-                    .offset(y: -14)
+                    .offset(y: -20)
                 }
-                .frame(height: 132)
+                .frame(height: 172)
 
                 DemoBadge()
                     .padding(.top, 6)

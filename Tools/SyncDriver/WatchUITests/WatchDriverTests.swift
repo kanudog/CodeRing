@@ -25,6 +25,90 @@ final class WatchDriverTests: XCTestCase {
         XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10), "weight page not shown")
     }
 
+    /// v5 feedback tour: spaced home trio → IVF/BLOOD chips via tap-mode
+    /// More submenu → uniform caps radial labels → compact timers sheet.
+    func testV5_feedback() throws {
+        ring.terminate()
+        sleep(1)
+        ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        sleep(3)   // shot: home with spaced satellites
+
+        let start = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START'")).firstMatch
+        XCTAssertTrue(start.waitForExistence(timeout: 15))
+        start.tap()
+        ring.buttons["Cardiac Arrest"].tap()
+        XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10))
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 8))
+        go.tap()
+        let startCPR = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch
+        XCTAssertTrue(startCPR.waitForExistence(timeout: 8))
+        startCPR.tap()
+        sleep(1)
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        let ay = f.height - 40
+
+        // Epi via hold-drag on MEDS.
+        let mx = f.width * 0.84
+        at(mx, ay).press(forDuration: 0.5,
+                         thenDragTo: at(mx - 84, ay - 6),
+                         withVelocity: .slow,
+                         thenHoldForDuration: 1.5)
+        sleep(1)
+
+        // Chip abbreviations (IVF/BLOOD) are unit-tested in CodeCore —
+        // synthetic taps can't open tap mode, so no UI path here.
+        // EVENTS bloom labels: hold on dead space for the burst.
+        let ex = f.width * 0.5
+        at(ex, ay).press(forDuration: 0.5,
+                         thenDragTo: at(ex + 55, ay - 50),
+                         withVelocity: .slow,
+                         thenHoldForDuration: 3.0)
+        sleep(1)
+
+        // SHOCK bloom labels (CARDIOVERSION rename) — hold shy of the arc.
+        let sx = f.width * 0.16
+        at(sx, ay).press(forDuration: 0.5,
+                         thenDragTo: at(sx + 25, ay - 30),
+                         withVelocity: .slow,
+                         thenHoldForDuration: 2.5)
+        sleep(1)
+
+        // Timers sheet: second header button from the left.
+        let headerButtons = ring.buttons.allElementsBoundByIndex.filter {
+            $0.frame.minY >= 0 && $0.frame.midY < 60 && $0.isHittable
+        }.sorted { $0.frame.minX < $1.frame.minX }
+        XCTAssertTrue(headerButtons.count >= 2, "header buttons missing")
+        headerButtons[1].tap()
+        XCTAssertTrue(ring.staticTexts["EPINEPHRINE"].waitForExistence(timeout: 8),
+                      "timers sheet missing epi row")
+        // The live header behind the sheet also says TOTAL CODE — the
+        // timers LIST must not add a second one.
+        XCTAssertLessThanOrEqual(ring.staticTexts.matching(identifier: "TOTAL CODE").count, 1,
+                                 "timers list should not repeat total code")
+        sleep(3)   // shot: compact timers
+        ring.buttons.matching(identifier: "Close").firstMatch.tap()
+        sleep(1)
+
+        // End & sync.
+        let topButtons = ring.buttons.allElementsBoundByIndex.filter {
+            $0.frame.minY >= 0 && $0.frame.midY < 60 && $0.isHittable
+        }
+        topButtons.max(by: { $0.frame.maxX < $1.frame.maxX })?.tap()
+        let end = ring.buttons["End & review"]
+        XCTAssertTrue(end.waitForExistence(timeout: 10))
+        end.tap()
+        sleep(4)
+    }
+
     /// v4 feedback tour: home trio → centered AGE + yr toggle → live header
     /// (CYCLE chip, no demo, no idle EPI) → left med chips → Access expand
     /// with back-beside-✕ → wide shock arc → raised pulse overlay.

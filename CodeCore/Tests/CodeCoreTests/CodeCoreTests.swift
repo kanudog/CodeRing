@@ -48,6 +48,16 @@ final class DoseCalculatorTests: XCTestCase {
         XCTAssertEqual(DoseCalculator.trim(16.0), "16")
         XCTAssertEqual(DoseCalculator.trim(0.08), "0.08")
     }
+
+    func testChipAbbreviations() {
+        // Clinical shorthand beats generated abbreviations.
+        XCTAssertEqual(crChipAbbreviation(key: "rosc.bolus", title: "Fluid bolus"), "IVF")
+        // Short first words are said in full…
+        XCTAssertEqual(crChipAbbreviation(key: "med.blood", title: "Blood given"), "BLOOD")
+        // …long ones get three letters.
+        XCTAssertEqual(crChipAbbreviation(key: "x", title: "Epinephrine"), "EPI")
+        XCTAssertEqual(crChipAbbreviation(key: "x", title: "Amiodarone"), "AMI")
+    }
 }
 
 final class WeightEstimatorTests: XCTestCase {

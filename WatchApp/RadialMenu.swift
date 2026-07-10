@@ -360,20 +360,24 @@ struct RadialMenuOverlay: View {
                 }
 
                 // Every bubble carries its name — the whole arc reads at a
-                // glance before the finger commits to a direction.
+                // glance before the finger commits to a direction. ONE font
+                // for every label on every menu: small caps-only type that
+                // wraps instead of shrinking, so nothing reads bigger or
+                // smaller than its neighbors.
                 ForEach(Array(model.items.enumerated()), id: \.element.id) { i, item in
                     let hovered = model.hoveredID == item.id
                     let p = model.labelPosition(forIndex: i, count: model.items.count)
-                    Text(item.title)
-                        .font(.system(size: 8, weight: .heavy, design: .rounded))
+                    Text(item.title.uppercased())
+                        .font(.system(size: 7, weight: .heavy, design: .rounded))
+                        .tracking(0.3)
                         .foregroundStyle(hovered ? item.color : CRTheme.text)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.55)
-                        .frame(maxWidth: 54)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 62)
                         .padding(.horizontal, 3)
                         .padding(.vertical, 1)
-                        .background(Capsule().fill(CRTheme.bg.opacity(0.72)))
-                        .position(x: min(max(p.x, 27), size.width - 27),
+                        .background(RoundedRectangle(cornerRadius: 5).fill(CRTheme.bg.opacity(0.72)))
+                        .position(x: min(max(p.x, 30), size.width - 30),
                                   y: max(10, p.y))
                         .allowsHitTesting(false)
                 }

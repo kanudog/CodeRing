@@ -220,7 +220,7 @@ struct LiveSessionView: View {
                     let drug = engine.drugSet.drugs.first { $0.id.uuidString == key }
                     let tint = drug.map { Color(hex: $0.colorHex) } ?? CRTheme.med
                     VStack(alignment: align, spacing: 0) {
-                        Text(String((drug?.name ?? event.title).prefix(3)).uppercased())
+                        Text(crChipAbbreviation(key: key, title: drug?.name ?? event.title))
                             .font(.system(size: 7, weight: .heavy, design: .rounded))
                             .tracking(0.4)
                             .foregroundStyle(tint)
@@ -233,6 +233,7 @@ struct LiveSessionView: View {
         }
         .padding(.horizontal, 1)
     }
+
 
     private func header(now: Date) -> some View {
         VStack(spacing: 1) {
