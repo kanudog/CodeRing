@@ -1,0 +1,232 @@
+// CodeCoreTests — run with `swift test` inside CodeCore/ on the Mac,
+// or ⌘U in Xcode. These lock in the math a lesser model must never break.
+
+import XCTest
+@testable import CodeCore
+
+final class DoseCalculatorTests: XCTestCase {
+
+    func testEpi8kg() {
+        let doses = DoseCalculator.doses(for: Defaults.epinephrine, weightKg: 8)
+        XCTAssertEqual(doses.count, 1)
+        XCTAssertEqual(doses[0].amount, 0.08, accuracy: 0.0001)     // mg
+        XCTAssertEqual(doses[0].volumeMl ?? 0, 0.8, accuracy: 0.0001) // mL of 0.1 mg/mL
+        XCTAssertFalse(doses[0].capped)
+    }
+
+    func testEpiCapAtOneMg() {
+        let doses = DoseCalculator.doses(for: Defaults.epinephrine, weightKg: 150)
+        XCTAssertEqual(doses[0].amount, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(doses[0].volumeMl ?? 0, 10.0, accuracy: 0.0001)
+        XCTAssertTrue(doses[0].capped)
+    }
+
+    func testAdenosineLadder() {
+        let doses = DoseCalculator.doses(for: Defaults.adenosine, weightKg: 20)
+        XCTAssertEqual(doses[0].amount, 2.0, accuracy: 0.0001)   // 0.1 × 20
+        XCTAssertEqual(doses[1].amount, 4.0, accuracy: 0.0001)   // 0.2 × 20
+        // Ladder advances with prior count, then holds the last rung.
+        XCTAssertEqual(DoseCalculator.primaryDose(for: Defaults.adenosine, weightKg: 20, priorCount: 0)?.stepLabel, "1st")
+        XCTAssertEqual(DoseCalculator.primaryDose(for: Defaults.adenosine, weightKg: 20, priorCount: 1)?.stepLabel, "2nd")
+        XCTAssertEqual(DoseCalculator.primaryDose(for: Defaults.adenosine, weightKg: 20, priorCount: 5)?.stepLabel, "2nd")
+    }
+
+    func testDefibEnergies() {
+        let doses = DoseCalculator.doses(for: Defaults.defibrillation, weightKg: 12)
+        XCTAssertEqual(doses[0].amount, 24, accuracy: 0.0001)    // 2 J/kg
+        XCTAssertEqual(doses[1].amount, 48, accuracy: 0.0001)    // 4 J/kg
+        XCTAssertNil(doses[0].volumeMl)                          // energy has no mL
+    }
+
+    func testVolumeFloor() {
+        // Tiny volumes never render as 0.0 mL.
+        XCTAssertEqual(DoseCalculator.roundedVolume(0.031), 0.1, accuracy: 0.0001)
+    }
+
+    func testTrimFormatting() {
+        XCTAssertEqual(DoseCalculator.trim(0.80), "0.8")
+        XCTAssertEqual(DoseCalculator.trim(16.0), "16")
+        XCTAssertEqual(DoseCalculator.trim(0.08), "0.08")
+    }
+}
+
+final class WeightEstimatorTests: XCTestCase {
+
+    func testInfantFormula() {
+        XCTAssertEqual(WeightEstimator.weightKg(forAgeMonths: 6), 7.0, accuracy: 0.001)   // 0.5×6+4
+    }
+
+    func testChildFormula() {
+        XCTAssertEqual(WeightEstimator.weightKg(forAgeMonths: 48), 16.0, accuracy: 0.001) // (4+4)×2
+    }
+
+    func testCap() {
+        XCTAssertLessThanOrEqual(WeightEstimator.weightKg(forAgeMonths: 300), 50)
+    }
+}
+
+@MainActor
+final class SessionEngineTests: XCTestCase {
+
+    private func makeEngine(start: Date) -> SessionEngine {
+        SessionEngine(protocolDef: Defaults.palsArrest,
+                      drugSet: Defaults.palsDrugSet,
+                      eventDefs: Defaults.builtInEvents,
+                      patient: PatientContext(weightKg: 10, weightSource: .manual),
+                      startDate: start)
+    }
+
+    func testCycleCountdownGoesOverdueUntilPulseCheck() {
+        // Cycles no longer wrap on the wall clock: the countdown runs negative
+        // until a pulse check completes, which is what closes the cycle.
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        XCTAssertEqual(engine.cycleRemaining(at: start), 120, accuracy: 0.01)
+        XCTAssertEqual(engine.cycleRemaining(at: start.addingTimeInterval(30)), 90, accuracy: 0.01)
+        XCTAssertEqual(engine.cycleRemaining(at: start.addingTimeInterval(125)), -5, accuracy: 0.01)
+        XCTAssertEqual(engine.cycleIndex(at: start.addingTimeInterval(125)), 0)   // still cycle 1
+
+        engine.beginPulseCheck(at: start.addingTimeInterval(130))
+        // Frozen mid-check, and the check clock runs on its own.
+        XCTAssertEqual(engine.cycleRemaining(at: start.addingTimeInterval(137)), -10, accuracy: 0.01)
+        XCTAssertEqual(engine.pulseCheckElapsed(at: start.addingTimeInterval(137)), 7, accuracy: 0.01)
+
+        engine.completePulseCheck(pulseFound: false, at: start.addingTimeInterval(140))
+        XCTAssertEqual(engine.cycleIndex(at: start.addingTimeInterval(140)), 1)
+        XCTAssertEqual(engine.cycleRemaining(at: start.addingTimeInterval(140)), 120, accuracy: 0.01)
+        // The 10 s hands-off interval counts against the CPR fraction…
+        XCTAssertEqual(engine.session.pauses.count, 1)
+        XCTAssertEqual(engine.session.pauses[0].seconds(clampedTo: start.addingTimeInterval(999)),
+                       10, accuracy: 0.01)
+        // …and both bookends land in the log.
+        XCTAssertTrue(engine.session.events.contains { $0.definitionID == "pulse.check" })
+        XCTAssertTrue(engine.session.events.contains { $0.definitionID == "pulse.resume" })
+    }
+
+    func testPulseFoundFlowsIntoROSC() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        engine.beginPulseCheck(at: start.addingTimeInterval(120))
+        engine.completePulseCheck(pulseFound: true, at: start.addingTimeInterval(128))
+        XCTAssertTrue(engine.roscAchieved)
+        XCTAssertFalse(engine.isInPulseCheck)
+        XCTAssertNotNil(engine.session.pauses[0].end)
+        XCTAssertTrue(engine.session.events.contains { $0.definitionID == "pulse.found" })
+    }
+
+    func testDrugIntervalRunsThroughPulseCheck() {
+        // Same clinical rule as pauses: hands-off never freezes drug timers.
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        let epiSpec = Defaults.palsArrest.intervalSpecs[0]
+        engine.beginPulseCheck(at: start.addingTimeInterval(100))
+        engine.completePulseCheck(pulseFound: false, at: start.addingTimeInterval(115))
+        XCTAssertEqual(engine.intervalRemaining(epiSpec, at: start.addingTimeInterval(115)),
+                       65, accuracy: 0.01)   // 180 − 115, untouched by the check
+    }
+
+    func testRunningTimersListTotalAndSinceLast() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        engine.logDrug(Defaults.epinephrine, at: start.addingTimeInterval(60))
+        engine.logDrug(Defaults.epinephrine, at: start.addingTimeInterval(240))
+        let now = start.addingTimeInterval(300)
+        let timers = engine.session.runningTimers(at: now)
+        XCTAssertEqual(timers.first?.id, "total")
+        XCTAssertEqual(timers.first?.elapsed(at: now) ?? 0, 300, accuracy: 0.01)
+        // Only the LATEST epi drives its since-last timer.
+        let epi = timers.first { $0.id == Defaults.epiID.uuidString }
+        XCTAssertEqual(epi?.elapsed(at: now) ?? 0, 60, accuracy: 0.01)
+    }
+
+    func testPauseFreezesCycleAndRecordsInterval() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        engine.togglePause(at: start.addingTimeInterval(40))          // pause at t+40
+        let frozen = engine.cycleRemaining(at: start.addingTimeInterval(70))
+        XCTAssertEqual(frozen, 80, accuracy: 0.01)                    // still shows 80s left
+        engine.togglePause(at: start.addingTimeInterval(70))          // resume after 30s gap
+        XCTAssertEqual(engine.cycleRemaining(at: start.addingTimeInterval(70)), 80, accuracy: 0.01)
+        XCTAssertEqual(engine.session.pauses.count, 1)
+        XCTAssertEqual(engine.session.pauses[0].seconds(clampedTo: start.addingTimeInterval(999)),
+                       30, accuracy: 0.01)
+    }
+
+    func testEpiResetsIntervalTimer() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        let epiSpec = Defaults.palsArrest.intervalSpecs[0]
+        XCTAssertEqual(engine.intervalRemaining(epiSpec, at: start.addingTimeInterval(100)),
+                       80, accuracy: 0.01)
+        engine.logDrug(Defaults.epinephrine, at: start.addingTimeInterval(100))
+        XCTAssertEqual(engine.intervalRemaining(epiSpec, at: start.addingTimeInterval(100)),
+                       180, accuracy: 0.01)
+        XCTAssertEqual(engine.session.events.filter { $0.category == .medication }.count, 1)
+    }
+
+    func testRoscClosesPauseAndStopsFurtherPauses() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        engine.togglePause(at: start.addingTimeInterval(10))
+        engine.markROSC(at: start.addingTimeInterval(20))
+        XCTAssertTrue(engine.roscAchieved)
+        XCTAssertNotNil(engine.session.pauses[0].end)
+        engine.togglePause(at: start.addingTimeInterval(30))          // ignored post-ROSC
+        XCTAssertFalse(engine.isPaused)
+    }
+
+    func testReArrestReturnsToCPRAndKeepsFirstROSC() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        engine.markROSC(at: start.addingTimeInterval(100))
+        XCTAssertTrue(engine.roscAchieved)
+
+        engine.reArrest(at: start.addingTimeInterval(200))
+        XCTAssertFalse(engine.roscAchieved)
+        // Fresh cycle from the re-arrest moment; pauses work again.
+        XCTAssertEqual(engine.cycleRemaining(at: start.addingTimeInterval(230)), 90, accuracy: 0.01)
+        engine.togglePause(at: start.addingTimeInterval(240))
+        XCTAssertTrue(engine.isPaused)
+        engine.togglePause(at: start.addingTimeInterval(250))
+
+        // Second ROSC: live state flips back, roscDate still records the FIRST.
+        engine.markROSC(at: start.addingTimeInterval(300))
+        XCTAssertTrue(engine.roscAchieved)
+        XCTAssertEqual(engine.session.roscDate, start.addingTimeInterval(100))
+        XCTAssertEqual(engine.roscElapsed(at: start.addingTimeInterval(360)), 60, accuracy: 0.01)
+        XCTAssertTrue(engine.session.events.contains { $0.definitionID == "outcome.rearrest" })
+        XCTAssertEqual(engine.session.events.filter { $0.definitionID == "outcome.rosc" }.count, 2)
+    }
+
+    func testVitalsCadenceRunsOnlyInROSC() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        XCTAssertNil(engine.vitalsRemaining(at: start.addingTimeInterval(10)))
+
+        engine.markROSC(at: start.addingTimeInterval(100))
+        XCTAssertEqual(engine.vitalsRemaining(at: start.addingTimeInterval(200)) ?? 0,
+                       200, accuracy: 0.01)   // 300 s cadence, 100 s in
+        // Overdue goes negative, same convention as the pulse check.
+        XCTAssertEqual(engine.vitalsRemaining(at: start.addingTimeInterval(450)) ?? 0,
+                       -50, accuracy: 0.01)
+
+        engine.confirmVitals(at: start.addingTimeInterval(450))
+        XCTAssertEqual(engine.vitalsRemaining(at: start.addingTimeInterval(500)) ?? 0,
+                       250, accuracy: 0.01)
+        XCTAssertTrue(engine.session.events.contains { $0.definitionID == "rosc.vitals" })
+
+        engine.reArrest(at: start.addingTimeInterval(600))
+        XCTAssertNil(engine.vitalsRemaining(at: start.addingTimeInterval(610)))
+    }
+
+    func testStatsCprFraction() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        engine.togglePause(at: start.addingTimeInterval(30))
+        engine.togglePause(at: start.addingTimeInterval(60))          // 30s paused
+        engine.end(at: start.addingTimeInterval(120))                 // 120s total
+        let stats = engine.session.stats
+        XCTAssertEqual(stats.cprFraction, 0.75, accuracy: 0.01)       // 90/120
+        XCTAssertEqual(stats.pauseCount, 1)
+    }
+}

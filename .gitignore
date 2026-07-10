@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Xcode — user-specific state, never shared
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+DerivedData/
+build/
+*.moved-aside
+
+# Swift Package Manager build products & local IDE state
+.build/
+.swiftpm/
+
+# Archives / snapshots (not source)
+*.zip

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged into the generated Info.plist. Registers the codering:// scheme
+	     the complication deep link uses (BUILD_MANUAL §6). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.sebastianheredia.CodeRing.watchkitapp</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>codering</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
