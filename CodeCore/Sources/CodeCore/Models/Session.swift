@@ -69,15 +69,23 @@ public struct RunningTimer: Identifiable, Sendable, Equatable {
 }
 
 public extension CodeSession {
-    /// Total code time plus a since-last timer for every distinct thing
-    /// logged (meds, shocks, pulse checks, swaps, customs…). Pause toggles
-    /// and check-resume bookkeeping are noise, not timers — skipped.
+    /// Total code time plus a since-last timer for things you'd REPEAT per
+    /// the algorithm — meds, shocks, pulse/rhythm checks, compressor swaps,
+    /// vitals, customs. One-shots (access, intubation, CPR started, weight
+    /// changes, outcomes) aren't timers: "time since intubation" answers no
+    /// clinical question mid-code.
     func runningTimers(at now: Date = Date()) -> [RunningTimer] {
-        let skipped: Set<String> = ["cpr.toggle", "pulse.resume"]
+        let repeatableIDs: Set<String> = ["pulse.check", "rhythm.check",
+                                          "cpr.swap", "rosc.vitals"]
+        func isRepeatable(_ event: CodeEvent) -> Bool {
+            switch event.category {
+            case .medication, .defibrillation, .custom: return true
+            default: return repeatableIDs.contains(event.definitionID ?? "")
+            }
+        }
         var latest: [String: CodeEvent] = [:]
-        for event in events {
+        for event in events where isRepeatable(event) {
             let key = event.definitionID ?? event.title
-            guard !skipped.contains(key) else { continue }
             if let seen = latest[key], seen.date > event.date { continue }
             latest[key] = event
         }

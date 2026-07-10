@@ -138,8 +138,9 @@ struct LiveSessionView: View {
                           epiRem: epiRem, epiLen: epiLen, epiRunning: epiRunning,
                           epiOverdue: epiOverdue, epiSpec: epiSpec)
                     .frame(maxWidth: .infinity)
-                    .overlay(alignment: .leading) { cycleTag(idx) }
-                    .overlay(alignment: .trailing) { medChips(now: now) }
+                    // Meds fill the LEFT gutter first, spill RIGHT after three.
+                    .overlay(alignment: .leading) { medChipColumn(now: now, side: 0) }
+                    .overlay(alignment: .trailing) { medChipColumn(now: now, side: 1) }
             }
 
             Spacer(minLength: 48)   // anchor zone
@@ -197,32 +198,40 @@ struct LiveSessionView: View {
         }
     }
 
-    /// Repeatable meds ride the right gutter: abbreviation + time since the
-    /// last dose, colored like the drug. Newest three, most recent on top.
-    private func medChips(now: Date) -> some View {
+    /// Since-last chips for given meds. Slots are assigned in FIRST-dose
+    /// order and never move: left gutter takes the first three, the right
+    /// gutter the next three — a repeat dose just resets its clock in place.
+    private func medChipColumn(now: Date, side: Int) -> some View {
+        var firstSeen: [String] = []
         var latest: [String: CodeEvent] = [:]
         for e in engine.session.events where e.category == .medication {
             guard let key = e.definitionID else { continue }
+            if !firstSeen.contains(key) { firstSeen.append(key) }
             if let seen = latest[key], seen.date > e.date { continue }
             latest[key] = e
         }
-        let rows = latest.values.sorted { $0.date > $1.date }.prefix(3)
-        return VStack(alignment: .trailing, spacing: 5) {
-            ForEach(Array(rows), id: \.id) { event in
-                let drug = engine.drugSet.drugs.first { $0.id.uuidString == event.definitionID }
-                let tint = drug.map { Color(hex: $0.colorHex) } ?? CRTheme.med
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(String((drug?.name ?? event.title).prefix(4)).uppercased())
-                        .font(.system(size: 7, weight: .heavy, design: .rounded))
-                        .tracking(0.4)
-                        .foregroundStyle(tint)
-                    Text(crClock(now.timeIntervalSince(event.date)))
-                        .font(.system(size: 10, weight: .heavy, design: .rounded).monospacedDigit())
-                        .foregroundStyle(CRTheme.text)
+        let slots = side == 0 ? Array(firstSeen.prefix(3))
+                              : Array(firstSeen.dropFirst(3).prefix(3))
+        let align: HorizontalAlignment = side == 0 ? .leading : .trailing
+
+        return VStack(alignment: align, spacing: 5) {
+            ForEach(slots, id: \.self) { key in
+                if let event = latest[key] {
+                    let drug = engine.drugSet.drugs.first { $0.id.uuidString == key }
+                    let tint = drug.map { Color(hex: $0.colorHex) } ?? CRTheme.med
+                    VStack(alignment: align, spacing: 0) {
+                        Text(String((drug?.name ?? event.title).prefix(3)).uppercased())
+                            .font(.system(size: 7, weight: .heavy, design: .rounded))
+                            .tracking(0.4)
+                            .foregroundStyle(tint)
+                        Text(crClock(now.timeIntervalSince(event.date)))
+                            .font(.system(size: 10, weight: .heavy, design: .rounded).monospacedDigit())
+                            .foregroundStyle(CRTheme.text)
+                    }
                 }
             }
         }
-        .padding(.trailing, 1)
+        .padding(.horizontal, 1)
     }
 
     private func header(now: Date) -> some View {
@@ -261,12 +270,21 @@ struct LiveSessionView: View {
             }
 
             HStack(spacing: 5) {
-                DemoBadge(compact: true)
+                // Demo badge pulled from THIS screen at Sebastian's request
+                // ("for now", 2026-07-10) — every other screen and the PDF
+                // keep it. Cycle count took its slot.
+                Text("CYCLE \(engine.cycleIndex(at: now) + 1)")
+                    .font(.system(size: 9, weight: .heavy, design: .rounded).monospacedDigit())
+                    .tracking(0.5)
+                    .foregroundStyle(CRTheme.bg)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(Capsule().fill(CRTheme.cpr))
                 // Tappable: mid-code weight (and protocol, once more exist)
                 // corrections without leaving the timer screen.
                 Button { showQuickEdit = true } label: {
                     HStack(spacing: 3) {
-                        Text("\(engine.protocolDef.shortName) · \(engine.session.patient.weightLabel)")
+                        Text(patientLine)
                             .font(.system(size: 10, weight: .bold, design: .rounded))
                             .foregroundStyle(CRTheme.textDim)
                         Image(systemName: "pencil.circle.fill")
@@ -291,18 +309,13 @@ struct LiveSessionView: View {
         .buttonStyle(.plain)
     }
 
-    /// Cycle counter lives beside the ring so the center text can breathe.
-    private func cycleTag(_ idx: Int) -> some View {
-        VStack(spacing: 0) {
-            Text("CYCLE")
-                .font(.system(size: 7, weight: .heavy, design: .rounded))
-                .tracking(0.6)
-                .foregroundStyle(CRTheme.textDim)
-            Text("\(idx + 1)")
-                .font(.system(size: 20, weight: .heavy, design: .rounded).monospacedDigit())
-                .foregroundStyle(CRTheme.cpr)
+    /// Protocol · weight · age — everything the quick-edit sheet can touch.
+    private var patientLine: String {
+        var line = "\(engine.protocolDef.shortName) · \(engine.session.patient.weightLabel)"
+        if let m = engine.session.patient.ageMonths {
+            line += m < 24 ? " · \(m)mo" : " · \(m / 12)y"
         }
-        .padding(.leading, 2)
+        return line
     }
 
     private func ringStack(cycleRem: TimeInterval, cycleLen: TimeInterval, idx: Int,
@@ -348,14 +361,11 @@ struct LiveSessionView: View {
                         .font(.system(size: 25, weight: .heavy, design: .rounded).monospacedDigit())
                         .foregroundStyle(checkOverdue ? CRTheme.med
                                          : (engine.isPaused ? CRTheme.textDim : CRTheme.text))
+                    // Nothing epi-related shows until the first dose is real.
                     if epiRunning {
                         Text(epiOverdue ? "\(epiTitle) DUE" : "\(epiTitle) \(crClock(max(0, epiRem)))")
                             .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
                             .foregroundStyle(epiOverdue ? CRTheme.med : epiColor)
-                    } else {
-                        Text("\(epiTitle) —")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundStyle(CRTheme.textDim.opacity(0.6))
                     }
                     if checkDue {
                         Text("TAP — PULSE CHECK")
@@ -438,6 +448,11 @@ struct LiveSessionView: View {
                     .padding(.top, 2)
                 }
                 .padding(.horizontal, 10)
+                // Bias the block upward: centered-in-safe-area reads LOW on
+                // the round-cornered face (big top inset, elements kissing
+                // the bottom edge).
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .offset(y: -14)
                 .onChange(of: over) { _, o in
                     if o { WatchHaptics.play(.retry) }
                 }
@@ -558,7 +573,9 @@ struct LiveSessionView: View {
                          center: CGPoint(x: size.width * 0.16, y: y),
                          symbol: "bolt.fill", label: "Shock", color: CRTheme.shock,
                          items: shockItems,
-                         arcStart: -78, arcEnd: -14, radius: 62,
+                         // wide arc + long radius: three options get the whole
+                         // upper-left quadrant instead of huddling together
+                         arcStart: -100, arcEnd: -20, radius: 72,
                          tapAction: quickShock,
                          model: menu, onSelect: selectShock)
 

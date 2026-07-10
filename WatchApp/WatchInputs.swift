@@ -8,14 +8,18 @@ import SwiftUI
 import CodeCore
 
 /// Compact digit pad for typing a weight or age directly on the watch.
+/// An optional alternate unit (months ↔ years) renders as tappable chips;
+/// the committed value is always converted to the PRIMARY unit.
 struct NumberPadSheet: View {
     let unit: String
+    var altUnit: (label: String, factor: Double)? = nil   // e.g. ("yr", 12)
     let allowsDecimal: Bool
     let range: ClosedRange<Double>
     let onCommit: (Double) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
+    @State private var usingAlt = false
 
     private let rows: [[String]] = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"]]
 
@@ -28,9 +32,14 @@ struct NumberPadSheet: View {
                         .foregroundStyle(CRTheme.text)
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
-                    Text(unit)
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(CRTheme.textDim)
+                    if let alt = altUnit {
+                        unitChip(unit, selected: !usingAlt) { usingAlt = false }
+                        unitChip(alt.label, selected: usingAlt) { usingAlt = true }
+                    } else {
+                        Text(unit)
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(CRTheme.textDim)
+                    }
                 }
                 .frame(height: 28)
 
@@ -66,8 +75,26 @@ struct NumberPadSheet: View {
     }
 
     private var value: Double? {
-        guard let v = Double(text), range.contains(v) else { return nil }
+        guard let raw = Double(text) else { return nil }
+        let v = usingAlt ? raw * (altUnit?.factor ?? 1) : raw
+        guard range.contains(v) else { return nil }
         return v
+    }
+
+    private func unitChip(_ label: String, selected: Bool,
+                          action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            WatchHaptics.play(.click)
+        } label: {
+            Text(label)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(selected ? CRTheme.bg : CRTheme.textDim)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(selected ? CRTheme.cpr : CRTheme.surface))
+        }
+        .buttonStyle(.plain)
     }
 
     private func tapDigit(_ key: String) {

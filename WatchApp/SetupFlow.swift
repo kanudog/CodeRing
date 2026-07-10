@@ -121,7 +121,8 @@ struct SetupFlowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .sheet(isPresented: $showKeypad) {
             if weightMode == .ageEstimate {
-                NumberPadSheet(unit: "mo", allowsDecimal: false, range: 0...216) {
+                NumberPadSheet(unit: "mo", altUnit: ("yr", 12),
+                               allowsDecimal: false, range: 0...216) {
                     ageMonths = $0
                 }
             } else {
@@ -250,9 +251,8 @@ struct SetupFlowView: View {
                             italicValue: resolvedAgeMonths == nil) {
                     showAgePad = true
                 }
-                // tucked between GO and the demo badge — the badge is a
-                // permanent fixture and never gets covered
-                .position(orbitPoint(center, orbit * 0.88, angleDeg: 96))
+                // dead-center under GO, tucked above the demo badge
+                .position(orbitPoint(center, orbit * 0.88, angleDeg: 90))
 
                 Button(action: launch) {
                     ZStack {
@@ -269,7 +269,8 @@ struct SetupFlowView: View {
             }
         }
         .sheet(isPresented: $showAgePad) {
-            NumberPadSheet(unit: "mo", allowsDecimal: false, range: 0...216) {
+            NumberPadSheet(unit: "mo", altUnit: ("yr", 12),
+                           allowsDecimal: false, range: 0...216) {
                 confirmAgeMonths = Int($0)
             }
         }

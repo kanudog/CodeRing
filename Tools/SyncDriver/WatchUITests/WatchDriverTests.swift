@@ -25,6 +25,106 @@ final class WatchDriverTests: XCTestCase {
         XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10), "weight page not shown")
     }
 
+    /// v4 feedback tour: home trio → centered AGE + yr toggle → live header
+    /// (CYCLE chip, no demo, no idle EPI) → left med chips → Access expand
+    /// with back-beside-✕ → wide shock arc → raised pulse overlay.
+    func testV4_feedback() throws {
+        ring.terminate()
+        sleep(1)
+        ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        sleep(3)   // shot: home trio
+
+        let start = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START'")).firstMatch
+        XCTAssertTrue(start.waitForExistence(timeout: 15))
+        start.tap()
+        let arrest = ring.buttons["Cardiac Arrest"]
+        XCTAssertTrue(arrest.waitForExistence(timeout: 10))
+        arrest.tap()
+        XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10))
+        ring.buttons["Next"].tap()
+
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 8))
+        sleep(3)   // shot: AGE centered under GO
+
+        // Age pad in YEARS: 3 yr → 36 mo.
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'AGE'")).firstMatch.tap()
+        XCTAssertTrue(ring.buttons["Done"].waitForExistence(timeout: 8))
+        ring.buttons["yr"].tap()
+        ring.buttons["3"].tap()
+        sleep(2)   // shot: pad with yr selected
+        ring.buttons["Done"].tap()
+        XCTAssertTrue(go.waitForExistence(timeout: 8))
+        go.tap()
+
+        let startCPR = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch
+        XCTAssertTrue(startCPR.waitForExistence(timeout: 8))
+        startCPR.tap()
+        let pc = ring.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'NEXT PULSE CHECK'")).firstMatch
+        XCTAssertTrue(pc.waitForExistence(timeout: 8))
+        sleep(3)   // shot: CYCLE chip header, age in patient line, no EPI text
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        let ay = f.height - 40
+
+        // Epi → chip lands on the LEFT gutter.
+        let mx = f.width * 0.84
+        at(mx, ay).press(forDuration: 0.5,
+                         thenDragTo: at(mx - 84, ay - 6),
+                         withVelocity: .slow,
+                         thenHoldForDuration: 2.0)
+        sleep(2)   // shot: left EPI chip
+        XCTAssertTrue(ring.staticTexts["EPI"].waitForExistence(timeout: 6),
+                      "left med chip missing")
+
+        // EVENTS → hold on Access ~3 s: 2 s dwell expands the limbs, back
+        // pad appears NEXT TO the ✕. Release there logs nothing.
+        let ex = f.width * 0.5
+        // Access = index 2 of 6 (−105.6°, r 74) → offset (−19.9, −71.3).
+        at(ex, ay).press(forDuration: 0.5,
+                         thenDragTo: at(ex - 20, ay - 71),
+                         withVelocity: .slow,
+                         thenHoldForDuration: 4.6)
+        sleep(1)
+
+        // SHOCK → hold 1.2 s on Defib: expands NOTHING at <2 s; the burst
+        // catches the wide three-bubble arc.
+        let sx = f.width * 0.16
+        // Defib = index 0 of 3 (−100°, r 72) → offset (−12.5, −70.9).
+        at(sx, ay).press(forDuration: 0.5,
+                         thenDragTo: at(sx - 12, ay - 71),
+                         withVelocity: .slow,
+                         thenHoldForDuration: 1.2)
+        sleep(1)
+
+        // Pulse check (20 s override) → raised overlay.
+        sleep(10)
+        XCTAssertTrue(pc.waitForExistence(timeout: 20))
+        pc.tap()
+        let resume = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'RESUME CPR'")).firstMatch
+        XCTAssertTrue(resume.waitForExistence(timeout: 8))
+        sleep(3)   // shot: centered overlay
+        resume.tap()
+
+        // End & sync.
+        let topButtons = ring.buttons.allElementsBoundByIndex.filter {
+            $0.frame.minY >= 0 && $0.frame.midY < 60 && $0.isHittable
+        }
+        topButtons.max(by: { $0.frame.maxX < $1.frame.maxX })?.tap()
+        let end = ring.buttons["End & review"]
+        XCTAssertTrue(end.waitForExistence(timeout: 10))
+        end.tap()
+        sleep(4)
+    }
+
     /// v3 setup tour: weight ⓘ help sheet → confirm with AGE chip → age pad.
     func testV3A_setupTour() throws {
         toWeightPage()

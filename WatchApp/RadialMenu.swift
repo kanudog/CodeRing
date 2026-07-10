@@ -53,8 +53,10 @@ final class RadialMenuModel {
 
     private(set) var items: [RadialItem] = []
     private var stack: [Level] = []
-    private var hoverStart: Date = .distantPast
     private var backHoverStart: Date = .distantPast
+    /// Time-driven expansion: drag events stop for a motionless finger, so
+    /// dwell must run on a clock, not on the next touch delta.
+    private var dwellTask: Task<Void, Never>? = nil
     private var onSelect: ((RadialItem) -> Void)? = nil
 
     // MARK: - Lifecycle
@@ -78,6 +80,8 @@ final class RadialMenuModel {
     }
 
     func close() {
+        dwellTask?.cancel()
+        dwellTask = nil
         isOpen = false
         items = []
         hoveredID = nil
@@ -103,9 +107,16 @@ final class RadialMenuModel {
     }
 
     /// Labels sit radially outward from their bubble so no label ever covers
-    /// an adjacent bubble. Callers clamp to screen bounds.
+    /// an adjacent bubble — EXCEPT at the shallow ends of the arc, where
+    /// "outward" is sideways and lands on the neighbor: those go UNDER their
+    /// bubble instead (Sebastian: Pause/More labels overlapped bubbles).
     func labelPosition(forIndex i: Int, count: Int) -> CGPoint {
-        let a = angle(forIndex: i, count: count) * .pi / 180
+        let deg = angle(forIndex: i, count: count)
+        let a = deg * .pi / 180
+        if abs(sin(a)) < 0.45 {
+            let bubble = position(forIndex: i, count: count)
+            return CGPoint(x: bubble.x, y: bubble.y + 27)
+        }
         let r = radius + 30
         return CGPoint(x: anchor.x + r * cos(a),
                        y: anchor.y + r * sin(a))
@@ -158,35 +169,53 @@ final class RadialMenuModel {
         let newID = nearest?.item.id
         if newID != hoveredID {
             hoveredID = newID
-            hoverStart = Date()
             if newID != nil { WatchHaptics.play(.click) }
-        } else if let item = nearest?.item,
-                  let children = item.children, !children.isEmpty,
-                  Date().timeIntervalSince(hoverStart) > 0.30 {
-            expand(item, children: children)
+            scheduleDwell(for: nearest?.item)
         }
     }
 
+    /// Deliberate 2 s hold on an expandable item opens its sub-arc
+    /// (Sebastian: expansion must never happen by accident mid-slide).
+    private func scheduleDwell(for item: RadialItem?) {
+        dwellTask?.cancel()
+        dwellTask = nil
+        guard let item, let children = item.children, !children.isEmpty else { return }
+        dwellTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self, !Task.isCancelled,
+                  self.isOpen, !self.tapMode,
+                  self.hoveredID == item.id else { return }
+            self.expand(item, children: children)
+        }
+    }
+
+    /// Back target sits NEXT TO the ✕ pad at the origin — one place to look
+    /// for both exits, offset toward screen center so it never clips.
+    private func backPadPosition() -> CGPoint {
+        CGPoint(x: anchor.x + (anchor.x < 60 ? 38 : -38), y: anchor.y)
+    }
+
     private func expand(_ parent: RadialItem, children: [RadialItem]) {
-        let parentIndex = items.firstIndex(of: parent)
+        dwellTask?.cancel()
+        dwellTask = nil
         stack.append(Level(items: items, backPos: backPos, breadcrumb: breadcrumb))
-        backPos = parentIndex.map { position(forIndex: $0, count: items.count) }
+        backPos = backPadPosition()
         breadcrumb = parent.title
         items = children
         hoveredID = nil
-        hoverStart = Date()
         WatchHaptics.play(.directionUp)
     }
 
     /// Back one level — restores the parent arc exactly as it was.
     private func pop() {
         guard let level = stack.popLast() else { return }
+        dwellTask?.cancel()
+        dwellTask = nil
         items = level.items
         backPos = level.backPos
         breadcrumb = level.breadcrumb
         hoveredID = nil
         hoveringBack = false
-        hoverStart = Date()
         WatchHaptics.play(.directionDown)
     }
 
@@ -207,9 +236,8 @@ final class RadialMenuModel {
     func tapSelect(_ item: RadialItem) {
         guard tapMode else { return }
         if let children = item.children, !children.isEmpty {
-            let parentIndex = items.firstIndex(of: item)
             stack.append(Level(items: items, backPos: backPos, breadcrumb: breadcrumb))
-            backPos = parentIndex.map { position(forIndex: $0, count: items.count) }
+            backPos = backPadPosition()
             breadcrumb = item.title
             items = children
             WatchHaptics.play(.directionUp)
@@ -219,10 +247,15 @@ final class RadialMenuModel {
         }
     }
 
-    /// In tap mode, tapping the origin pad pops one level, or closes at root.
-    func tapAnchor() {
+    /// Tap mode: the ✕ always closes; the chevron pad pops one level.
+    func tapClose() {
         guard tapMode else { return }
-        if stack.isEmpty { close() } else { pop() }
+        close()
+    }
+
+    func tapBack() {
+        guard tapMode else { return }
+        pop()
     }
 
     private func fire(_ item: RadialItem) {
@@ -362,7 +395,7 @@ struct RadialMenuOverlay: View {
                     .scaleEffect(model.hoveringBack ? 1.2 : 1.0)
                     .animation(.spring(duration: 0.15), value: model.hoveringBack)
                     .position(back)
-                    .onTapGesture { model.tapAnchor() }
+                    .onTapGesture { model.tapBack() }
                 }
 
                 // ✕ pad at the origin — drag back here (or tap in tap mode)
@@ -381,7 +414,7 @@ struct RadialMenuOverlay: View {
                 .scaleEffect(model.hoveringCancel ? 1.2 : 1.0)
                 .animation(.spring(duration: 0.15), value: model.hoveringCancel)
                 .position(model.anchor)
-                .onTapGesture { model.tapAnchor() }
+                .onTapGesture { model.tapClose() }
 
                 // Readout chip — the hovered item's name, big and glanceable
                 VStack(spacing: 1) {

@@ -143,6 +143,27 @@ final class SessionEngineTests: XCTestCase {
         XCTAssertEqual(epi?.elapsed(at: now) ?? 0, 60, accuracy: 0.01)
     }
 
+    func testRunningTimersOnlyTrackRepeatables() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        engine.startCPR(at: start)
+        engine.logDrug(Defaults.epinephrine, at: start.addingTimeInterval(60))
+        let access = Defaults.builtInEvents.first { $0.id == "access.iv" }!
+        engine.logEvent(access, subOption: "R arm", at: start.addingTimeInterval(70))
+        let tube = Defaults.builtInEvents.first { $0.id == "airway.ett" }!
+        engine.logEvent(tube, at: start.addingTimeInterval(80))
+        let swap = Defaults.builtInEvents.first { $0.id == "cpr.swap" }!
+        engine.logEvent(swap, at: start.addingTimeInterval(90))
+
+        let ids = Set(engine.session.runningTimers(at: start.addingTimeInterval(100)).map(\.id))
+        XCTAssertTrue(ids.contains("total"))
+        XCTAssertTrue(ids.contains(Defaults.epiID.uuidString))   // med — repeatable
+        XCTAssertTrue(ids.contains("cpr.swap"))                  // swap — repeatable
+        XCTAssertFalse(ids.contains("access.iv"))                // one-shots: no timer
+        XCTAssertFalse(ids.contains("airway.ett"))
+        XCTAssertFalse(ids.contains("cpr.start"))
+    }
+
     func testPauseFreezesCycleAndRecordsInterval() {
         let start = Date(timeIntervalSince1970: 1_000_000)
         let engine = makeEngine(start: start)

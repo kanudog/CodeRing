@@ -54,46 +54,47 @@ struct HomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 10) {
-                // The one button that matters — a bullseye, like GO.
-                Button(action: startAction) {
-                    ZStack {
-                        Circle().fill(CRTheme.cpr)
-                        Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1.5)
-                        VStack(spacing: 2) {
-                            Image(systemName: "bolt.heart.fill")
-                                .font(.system(size: 26, weight: .bold))
-                            Text("START")
-                                .font(.system(size: 14, weight: .heavy, design: .rounded))
-                                .tracking(1.2)
-                            Text("CODE")
-                                .font(.system(size: 14, weight: .heavy, design: .rounded))
-                                .tracking(1.2)
-                        }
-                        .foregroundStyle(CRTheme.bg)
+            VStack(spacing: 6) {
+                // Bullseye cluster: START CODE front and center, Recent and
+                // Settings tucked under its lower corners (drawn first, so
+                // the big button overlaps them slightly).
+                ZStack {
+                    // ±42 keeps the labels clear of the display's corner curve.
+                    orbitButton(symbol: "clock.arrow.circlepath", title: "Recent") {
+                        WatchSessionsList()
                     }
-                    .frame(width: 108, height: 108)
-                }
-                .buttonStyle(.plain)
+                    .offset(x: -42, y: 30)
 
-                NavigationLink {
-                    WatchSessionsList()
-                } label: {
-                    rowLabel(symbol: "clock.arrow.circlepath",
-                             title: "Recent",
-                             detail: "\(store.sessions.count)")
-                }
-                .buttonStyle(.plain)
+                    orbitButton(symbol: "gearshape.fill", title: "Settings") {
+                        WatchSettingsView()
+                    }
+                    .offset(x: 42, y: 30)
 
-                NavigationLink {
-                    WatchSettingsView()
-                } label: {
-                    rowLabel(symbol: "gearshape.fill", title: "Settings", detail: "")
+                    Button(action: startAction) {
+                        ZStack {
+                            Circle().fill(CRTheme.cpr)
+                            Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1.5)
+                            VStack(spacing: 2) {
+                                Image(systemName: "bolt.heart.fill")
+                                    .font(.system(size: 24, weight: .bold))
+                                Text("START")
+                                    .font(.system(size: 13, weight: .heavy, design: .rounded))
+                                    .tracking(1.2)
+                                Text("CODE")
+                                    .font(.system(size: 13, weight: .heavy, design: .rounded))
+                                    .tracking(1.2)
+                            }
+                            .foregroundStyle(CRTheme.bg)
+                        }
+                        .frame(width: 100, height: 100)
+                    }
+                    .buttonStyle(.plain)
+                    .offset(y: -14)
                 }
-                .buttonStyle(.plain)
+                .frame(height: 132)
 
                 DemoBadge()
-                    .padding(.top, 2)
+                    .padding(.top, 6)
             }
             .padding(.horizontal, 4)
         }
@@ -101,23 +102,26 @@ struct HomeView: View {
         .navigationTitle("CodeRing")
     }
 
-    private func rowLabel(symbol: String, title: String, detail: String) -> some View {
-        HStack {
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(CRTheme.textDim)
-                .frame(width: 22)
-            Text(title)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(CRTheme.text)
-            Spacer()
-            Text(detail)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(CRTheme.textDim)
+    /// Small circular satellite of the START CODE button.
+    private func orbitButton<Destination: View>(symbol: String, title: String,
+                                                @ViewBuilder destination: () -> Destination) -> some View {
+        NavigationLink { destination() } label: {
+            VStack(spacing: 2) {
+                ZStack {
+                    Circle().fill(CRTheme.surfaceHi)
+                    Circle().strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                    Image(systemName: symbol)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(CRTheme.text)
+                }
+                .frame(width: 54, height: 54)
+                Text(title.uppercased())
+                    .font(.system(size: 8, weight: .heavy, design: .rounded))
+                    .tracking(0.5)
+                    .foregroundStyle(CRTheme.textDim)
+            }
         }
-        .padding(.horizontal, 12)
-        .frame(height: 40)
-        .background(RoundedRectangle(cornerRadius: 12).fill(CRTheme.surface))
+        .buttonStyle(.plain)
     }
 }
 
