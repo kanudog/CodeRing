@@ -8,6 +8,7 @@
 
 import WatchKit
 import AVFoundation
+import OSLog
 import CodeCore
 
 enum WatchHaptics {
@@ -16,6 +17,34 @@ enum WatchHaptics {
     static func play(_ type: WKHapticType) {
         guard enabled else { return }
         WKInterfaceDevice.current().play(type)
+    }
+
+    /// User-mapped cue rhythms (Settings → Haptics). watchOS exposes no raw
+    /// intensity, so distinct SEQUENCES are what makes cues tellable-apart
+    /// without looking: pulse check vs med due vs swap-compressors moment.
+    @MainActor
+    static func play(_ pattern: HapticPattern) {
+        guard enabled else { return }
+        switch pattern {
+        case .single:
+            play(.notification)
+        case .double:
+            sequence([.directionUp, .directionUp], gap: 0.20)
+        case .triple:
+            sequence([.click, .click, .click], gap: 0.16)
+        case .long:
+            sequence([.start, .stop], gap: 0.45)
+        }
+    }
+
+    @MainActor
+    private static func sequence(_ types: [WKHapticType], gap: TimeInterval) {
+        Task { @MainActor in
+            for (i, t) in types.enumerated() {
+                if i > 0 { try? await Task.sleep(nanoseconds: UInt64(gap * 1_000_000_000)) }
+                play(t)
+            }
+        }
     }
 }
 
@@ -30,10 +59,12 @@ final class ToneMetronome {
     private var sampleRate: Double = 44_100
     private(set) var isRunning = false
     private var soundOn = false
+    private var frequency: Double = MetronomePitch.medium.frequency
 
-    func start(bpm: Int, soundOn: Bool) {
+    func start(bpm: Int, soundOn: Bool, pitch: MetronomePitch = .medium) {
         stop()
         self.soundOn = soundOn
+        self.frequency = pitch.frequency
         if soundOn { startAudio() }
         let interval = 60.0 / Double(max(60, min(160, bpm)))
         let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
@@ -60,15 +91,26 @@ final class ToneMetronome {
     }
 
     private func startAudio() {
+        // Every failure here used to be `try?`-swallowed — a silent metronome
+        // with no trace. Log loudly instead; the sound is a safety feature.
+        let log = Logger(subsystem: "com.sebastianheredia.CodeRing", category: "metronome")
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, options: [.mixWithOthers])
-        try? session.setActive(true)
+        do {
+            try session.setCategory(.playback, options: [.mixWithOthers])
+            try session.setActive(true)
+        } catch {
+            log.error("audio session setup failed: \(error.localizedDescription)")
+        }
 
         let audioEngine = AVAudioEngine()
         let output = audioEngine.outputNode
         let format = output.inputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            log.error("output format unusable (rate \(format.sampleRate), ch \(format.channelCount)) — no tick")
+            return
+        }
         sampleRate = format.sampleRate
-        let freq = 523.25   // C5 — warmer than the old 880 Hz beep
+        let freq = frequency   // user-selectable pitch (Settings → Metronome)
 
         let node = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
             guard let self else { return noErr }
@@ -92,7 +134,12 @@ final class ToneMetronome {
 
         audioEngine.attach(node)
         audioEngine.connect(node, to: output, format: format)
-        try? audioEngine.start()
+        do {
+            try audioEngine.start()
+            log.info("metronome audio running at \(freq, format: .fixed(precision: 1)) Hz")
+        } catch {
+            log.error("audio engine start failed: \(error.localizedDescription)")
+        }
         engine = audioEngine
         source = node
     }

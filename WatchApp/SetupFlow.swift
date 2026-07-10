@@ -20,8 +20,14 @@ struct SetupFlowView: View {
     @State private var manualKg: Double = 10
     @State private var broselowZone: BroselowZone?
     @State private var ageMonths: Double = 24
-    @State private var sex: Sex = .unspecified
     @State private var showKeypad = false
+    @State private var showInputHelp = false
+    /// Optional age set on the confirm screen (age-mode weight fills it in).
+    @State private var confirmAgeMonths: Int?
+    @State private var showAgePad = false
+    /// Protocol chip on confirm jumps to the picker; picking returns HERE,
+    /// not back through the weight flow.
+    @State private var returnToConfirm = false
 
     var body: some View {
         Group {
@@ -48,7 +54,10 @@ struct SetupFlowView: View {
                     Button {
                         protocolDef = proto
                         WatchHaptics.play(.click)
-                        step = .weight
+                        // Last-minute protocol change from Confirm goes
+                        // straight back — never back through weight entry.
+                        step = returnToConfirm ? .confirm : .weight
+                        returnToConfirm = false
                     } label: {
                         HStack {
                             Image(systemName: proto.symbol)
@@ -121,6 +130,22 @@ struct SetupFlowView: View {
                 }
             }
         }
+        .sheet(isPresented: $showInputHelp) { InputHelpSheet() }
+    }
+
+    /// The input-methods hint line with its ⓘ — tap for the full explainer.
+    private func inputMethodsHint(_ text: String) -> some View {
+        HStack(spacing: 3) {
+            Button { showInputHelp = true } label: {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(CRTheme.airway)
+            }
+            .buttonStyle(.plain)
+            Text(text)
+                .font(.system(size: 10, design: .rounded))
+                .foregroundStyle(CRTheme.textDim)
+        }
     }
 
     private var nextEnabled: Bool {
@@ -139,9 +164,7 @@ struct SetupFlowView: View {
                         .font(.system(size: 16, weight: .bold, design: .rounded))
                         .foregroundStyle(CRTheme.textDim)
                 }
-                Text("crown · edge strip · tap to type")
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(CRTheme.textDim)
+                inputMethodsHint("crown · edge strip · tap to type")
                 Spacer(minLength: 4)
             }
             .frame(maxWidth: .infinity)
@@ -167,9 +190,7 @@ struct SetupFlowView: View {
                 Text("≈ \(String(format: "%.1f", WeightEstimator.weightKg(forAgeMonths: Int(ageMonths)))) kg")
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(CRTheme.airway)
-                Text("APLS · crown · strip · tap to type")
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(CRTheme.textDim)
+                inputMethodsHint("APLS · crown · strip · tap")
                 Spacer(minLength: 4)
             }
             .frame(maxWidth: .infinity)
@@ -192,8 +213,8 @@ struct SetupFlowView: View {
 
     // MARK: - Step 3: confirm + GO
     // One screen, nothing scrolls: GO is the bullseye, the three editable
-    // facts orbit it as tappable chips (protocol/weight jump back a step,
-    // sex cycles in place).
+    // facts orbit it as tappable chips. Protocol returns straight here;
+    // age is optional (auto-filled when weight came from age).
 
     private var confirmPage: some View {
         GeometryReader { geo in
@@ -213,6 +234,7 @@ struct SetupFlowView: View {
                 .padding(.horizontal, 4)
 
                 confirmChip("PROTOCOL", protocolDef.shortName, CRTheme.med) {
+                    returnToConfirm = true
                     step = .protocolPick
                 }
                 .position(orbitPoint(center, orbit, angleDeg: -135))
@@ -222,12 +244,15 @@ struct SetupFlowView: View {
                 }
                 .position(orbitPoint(center, orbit, angleDeg: -45))
 
-                confirmChip("SEX", sex.label, CRTheme.access) {
-                    sex = Sex.allCases[(Sex.allCases.firstIndex(of: sex)! + 1) % Sex.allCases.count]
+                // Optional: italic "tap" until set, so the record can carry
+                // an age without ever blocking the GO.
+                confirmChip("AGE", resolvedAgeLabel, CRTheme.access,
+                            italicValue: resolvedAgeMonths == nil) {
+                    showAgePad = true
                 }
-                // lower-left diagonal: straight below collides with GO on
-                // 45 mm heights and with the demo badge on 41 mm ones
-                .position(orbitPoint(center, orbit, angleDeg: 135))
+                // tucked between GO and the demo badge — the badge is a
+                // permanent fixture and never gets covered
+                .position(orbitPoint(center, orbit * 0.88, angleDeg: 96))
 
                 Button(action: launch) {
                     ZStack {
@@ -243,6 +268,22 @@ struct SetupFlowView: View {
                 .position(center)
             }
         }
+        .sheet(isPresented: $showAgePad) {
+            NumberPadSheet(unit: "mo", allowsDecimal: false, range: 0...216) {
+                confirmAgeMonths = Int($0)
+            }
+        }
+    }
+
+    /// Age shown on the confirm chip: explicit entry wins, then age-mode's
+    /// estimate; nil = not provided (chip shows the italic "tap" prompt).
+    private var resolvedAgeMonths: Int? {
+        confirmAgeMonths ?? (weightMode == .ageEstimate ? Int(ageMonths) : nil)
+    }
+
+    private var resolvedAgeLabel: String {
+        guard let m = resolvedAgeMonths else { return "tap" }
+        return m < 24 ? "\(m) mo" : "\(m / 12) yr \(m % 12) mo"
     }
 
     private func orbitPoint(_ center: CGPoint, _ radius: CGFloat, angleDeg: Double) -> CGPoint {
@@ -252,6 +293,7 @@ struct SetupFlowView: View {
     }
 
     private func confirmChip(_ label: String, _ value: String, _ tint: Color,
+                             italicValue: Bool = false,
                              action: @escaping () -> Void) -> some View {
         Button {
             action()
@@ -264,7 +306,8 @@ struct SetupFlowView: View {
                     .foregroundStyle(tint)
                 Text(value)
                     .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundStyle(CRTheme.text)
+                    .italic(italicValue)
+                    .foregroundStyle(italicValue ? CRTheme.textDim : CRTheme.text)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
@@ -290,8 +333,8 @@ struct SetupFlowView: View {
         let patient = PatientContext(weightKg: resolvedKg,
                                      weightSource: weightMode,
                                      broselowZoneID: broselowZone?.id,
-                                     ageMonths: weightMode == .ageEstimate ? Int(ageMonths) : nil,
-                                     sex: sex)
+                                     ageMonths: resolvedAgeMonths,
+                                     sex: .unspecified)
         let engine = SessionEngine(protocolDef: proto,
                                    drugSet: drugs,
                                    eventDefs: store.allEventDefs,
@@ -336,6 +379,55 @@ struct SetupFlowView: View {
             .foregroundStyle(CRTheme.textDim)
     }
 
+}
+
+// MARK: - Input help
+
+/// The ⓘ explainer for the three weight/age input methods — mostly here to
+/// teach the edge strip's distance-based sensitivity.
+private struct InputHelpSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                helpRow(symbol: "digitalcrown.horizontal.press",
+                        title: "Crown",
+                        text: "Turn the Digital Crown for steady, stepped changes.")
+                helpRow(symbol: "hand.draw.fill",
+                        title: "Edge strip",
+                        text: "Swipe up or down on the bar at the right edge. On the bar, moves are big and fast. Keep swiping while sliding your finger LEFT, away from the bar — the further from the edge, the finer the adjustment.")
+                helpRow(symbol: "hand.tap.fill",
+                        title: "Tap to type",
+                        text: "Tap the big number to type an exact value on the keypad.")
+
+                Button { dismiss() } label: {
+                    Text("Close")
+                        .font(.system(size: 13, weight: .heavy, design: .rounded))
+                        .foregroundStyle(CRTheme.bg)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(Capsule().fill(CRTheme.cpr))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+            }
+            .padding(.horizontal, 6)
+        }
+        .background(CRTheme.bg)
+        .navigationTitle("Adjusting values")
+    }
+
+    private func helpRow(symbol: String, title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                .foregroundStyle(CRTheme.airway)
+            Text(text)
+                .font(.system(size: 11, design: .rounded))
+                .foregroundStyle(CRTheme.text)
+        }
+    }
 }
 
 // MARK: - Broselow wheel

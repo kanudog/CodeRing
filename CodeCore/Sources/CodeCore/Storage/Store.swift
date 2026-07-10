@@ -6,15 +6,73 @@
 import Foundation
 import Observation
 
+/// Metronome tick pitch. Frequencies stay musical (G4/C5/G5) so the tick
+/// reads as an instrument, not an alarm.
+public enum MetronomePitch: String, Codable, CaseIterable, Sendable {
+    case low, medium, high
+
+    public var frequency: Double {
+        switch self {
+        case .low: return 392.0       // G4
+        case .medium: return 523.25   // C5
+        case .high: return 783.99     // G5
+        }
+    }
+    public var label: String { rawValue.capitalized }
+}
+
+/// What a given clinical cue feels like on the wrist. Patterns are sequences
+/// of system haptics — watchOS exposes no raw intensity control, so distinct
+/// rhythms are how cues stay tellable-apart mid-code without looking.
+public enum HapticPattern: String, Codable, CaseIterable, Sendable {
+    case single       // one firm tap
+    case double       // two quick taps
+    case triple       // three rapid pulses
+    case long         // drawn-out buzz (start+stop pair)
+
+    public var label: String {
+        switch self {
+        case .single: return "Single tap"
+        case .double: return "Double tap"
+        case .triple: return "Triple pulse"
+        case .long: return "Long buzz"
+        }
+    }
+}
+
 public struct AppSettings: Codable, Sendable, Equatable {
     public var hapticsEnabled: Bool = true
     public var metronomeSoundOn: Bool = false     // haptic-only by default
     public var metronomeBPM: Int = 110
+    public var metronomePitch: MetronomePitch = .medium
+    public var keepScreenOn: Bool = false         // extend wake time during a live code
     public var cycleSecondsOverride: TimeInterval? = nil   // nil = protocol default (120)
     public var epiSecondsOverride: TimeInterval? = nil     // nil = protocol default (180)
     public var defaultDrugSetID: UUID? = nil
 
+    // Which wrist rhythm means what. Defaults keep the cues distinct.
+    public var hapticPulseCheckDue: HapticPattern = .triple
+    public var hapticMedDue: HapticPattern = .double
+    public var hapticCycleComplete: HapticPattern = .long   // compressor-swap moment
+
     public init() {}
+
+    // Custom decode: every field optional in the file, so settings written by
+    // older builds load intact instead of resetting to defaults.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        hapticsEnabled = try c.decodeIfPresent(Bool.self, forKey: .hapticsEnabled) ?? true
+        metronomeSoundOn = try c.decodeIfPresent(Bool.self, forKey: .metronomeSoundOn) ?? false
+        metronomeBPM = try c.decodeIfPresent(Int.self, forKey: .metronomeBPM) ?? 110
+        metronomePitch = try c.decodeIfPresent(MetronomePitch.self, forKey: .metronomePitch) ?? .medium
+        keepScreenOn = try c.decodeIfPresent(Bool.self, forKey: .keepScreenOn) ?? false
+        cycleSecondsOverride = try c.decodeIfPresent(TimeInterval.self, forKey: .cycleSecondsOverride)
+        epiSecondsOverride = try c.decodeIfPresent(TimeInterval.self, forKey: .epiSecondsOverride)
+        defaultDrugSetID = try c.decodeIfPresent(UUID.self, forKey: .defaultDrugSetID)
+        hapticPulseCheckDue = try c.decodeIfPresent(HapticPattern.self, forKey: .hapticPulseCheckDue) ?? .triple
+        hapticMedDue = try c.decodeIfPresent(HapticPattern.self, forKey: .hapticMedDue) ?? .double
+        hapticCycleComplete = try c.decodeIfPresent(HapticPattern.self, forKey: .hapticCycleComplete) ?? .long
+    }
 }
 
 @MainActor
@@ -121,6 +179,13 @@ public final class CodeStore {
     public func updateSettings(_ new: AppSettings) {
         settings = new
         persistSettings()
+    }
+
+    /// Deletes saved sessions only — drug sets, custom events, and settings
+    /// survive. This is the Recent screen's "Clear" action.
+    public func clearAllSessions() {
+        sessions = []
+        persistSessions()
     }
 
     public func resetAllData() {

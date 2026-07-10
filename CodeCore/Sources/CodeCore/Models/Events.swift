@@ -1,14 +1,14 @@
 // Events.swift — event tracking.
 // EventDefinition = what CAN be logged (built-in + custom, custom built on iPhone).
 // CodeEvent = what WAS logged, timestamped against code start.
-// subOptions power the optional second-level radial arc (e.g. IV site) —
-// releasing on the parent logs the generic event; sub-selection is never required.
+// subOptions power the second-level radial arc (e.g. access site) — a parent
+// with subOptions only expands; logging always requires releasing on a leaf.
 
 import Foundation
 import SwiftUI
 
 public enum EventCategory: String, Codable, CaseIterable, Sendable {
-    case medication, defibrillation, rhythm, airway, access, cpr, outcome, custom
+    case medication, defibrillation, rhythm, airway, access, cpr, outcome, care, custom
 
     public var colorHex: String {
         switch self {
@@ -19,6 +19,7 @@ public enum EventCategory: String, Codable, CaseIterable, Sendable {
         case .access: return CRTheme.accessHex
         case .cpr: return CRTheme.cprHex
         case .outcome: return CRTheme.roscHex
+        case .care: return CRTheme.careHex
         case .custom: return CRTheme.customHex
         }
     }
@@ -33,6 +34,7 @@ public enum EventCategory: String, Codable, CaseIterable, Sendable {
         case .access: return "Access"
         case .cpr: return "CPR"
         case .outcome: return "Outcome"
+        case .care: return "Care"
         case .custom: return "Custom"
         }
     }

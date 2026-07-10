@@ -35,6 +35,7 @@ public enum CRTheme {
     public static let cprHex = "A78BFA"          // CPR cycle — violet
     public static let roscHex = "4ADE80"         // outcome — bright green
     public static let rhythmHex = "60A5FA"       // rhythm checks — blue
+    public static let careHex = "2DD4BF"         // supportive care (temp, fluids) — teal
     public static let customHex = "F0ABFC"       // user-defined — pink
     public static let demoHex = "FFB020"         // demo badge — amber
 
@@ -51,6 +52,7 @@ public enum CRTheme {
     public static var cpr: Color { Color(hex: cprHex) }
     public static var rosc: Color { Color(hex: roscHex) }
     public static var rhythm: Color { Color(hex: rhythmHex) }
+    public static var care: Color { Color(hex: careHex) }
     public static var custom: Color { Color(hex: customHex) }
     public static var demo: Color { Color(hex: demoHex) }
 }

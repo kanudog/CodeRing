@@ -4,6 +4,16 @@
 <dict>
 	<!-- Merged into the generated Info.plist. Registers the codering:// scheme
 	     the complication deep link uses (BUILD_MANUAL §6). -->
+	<!-- Live code screen supports the Always-On luminance-dimmed state, so
+	     the timers stay visible when the wrist drops (Settings → Display). -->
+	<key>WKSupportsAlwaysOnDisplay</key>
+	<true/>
+	<!-- Extended runtime (physical-therapy class) keeps the app frontmost
+	     for the length of a code when "Keep screen awake" is on. -->
+	<key>WKBackgroundModes</key>
+	<array>
+		<string>physical-therapy</string>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

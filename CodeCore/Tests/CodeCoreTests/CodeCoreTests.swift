@@ -81,6 +81,7 @@ final class SessionEngineTests: XCTestCase {
         // until a pulse check completes, which is what closes the cycle.
         let start = Date(timeIntervalSince1970: 1_000_000)
         let engine = makeEngine(start: start)
+        engine.startCPR(at: start)
         XCTAssertEqual(engine.cycleRemaining(at: start), 120, accuracy: 0.01)
         XCTAssertEqual(engine.cycleRemaining(at: start.addingTimeInterval(30)), 90, accuracy: 0.01)
         XCTAssertEqual(engine.cycleRemaining(at: start.addingTimeInterval(125)), -5, accuracy: 0.01)
@@ -106,6 +107,7 @@ final class SessionEngineTests: XCTestCase {
     func testPulseFoundFlowsIntoROSC() {
         let start = Date(timeIntervalSince1970: 1_000_000)
         let engine = makeEngine(start: start)
+        engine.startCPR(at: start)
         engine.beginPulseCheck(at: start.addingTimeInterval(120))
         engine.completePulseCheck(pulseFound: true, at: start.addingTimeInterval(128))
         XCTAssertTrue(engine.roscAchieved)
@@ -119,6 +121,8 @@ final class SessionEngineTests: XCTestCase {
         let start = Date(timeIntervalSince1970: 1_000_000)
         let engine = makeEngine(start: start)
         let epiSpec = Defaults.palsArrest.intervalSpecs[0]
+        engine.startCPR(at: start)
+        engine.logDrug(Defaults.epinephrine, at: start)   // interval starts at first dose
         engine.beginPulseCheck(at: start.addingTimeInterval(100))
         engine.completePulseCheck(pulseFound: false, at: start.addingTimeInterval(115))
         XCTAssertEqual(engine.intervalRemaining(epiSpec, at: start.addingTimeInterval(115)),
@@ -142,6 +146,7 @@ final class SessionEngineTests: XCTestCase {
     func testPauseFreezesCycleAndRecordsInterval() {
         let start = Date(timeIntervalSince1970: 1_000_000)
         let engine = makeEngine(start: start)
+        engine.startCPR(at: start)
         engine.togglePause(at: start.addingTimeInterval(40))          // pause at t+40
         let frozen = engine.cycleRemaining(at: start.addingTimeInterval(70))
         XCTAssertEqual(frozen, 80, accuracy: 0.01)                    // still shows 80s left
@@ -152,16 +157,54 @@ final class SessionEngineTests: XCTestCase {
                        30, accuracy: 0.01)
     }
 
-    func testEpiResetsIntervalTimer() {
+    func testEpiIntervalIdleUntilFirstDoseThenResets() {
         let start = Date(timeIntervalSince1970: 1_000_000)
         let engine = makeEngine(start: start)
         let epiSpec = Defaults.palsArrest.intervalSpecs[0]
+        // Idle before any dose: no countdown, never overdue.
+        XCTAssertFalse(engine.intervalIsRunning(epiSpec))
+        XCTAssertFalse(engine.intervalIsOverdue(epiSpec, at: start.addingTimeInterval(999)))
         XCTAssertEqual(engine.intervalRemaining(epiSpec, at: start.addingTimeInterval(100)),
-                       80, accuracy: 0.01)
+                       180, accuracy: 0.01)   // reports full length while idle
+
         engine.logDrug(Defaults.epinephrine, at: start.addingTimeInterval(100))
-        XCTAssertEqual(engine.intervalRemaining(epiSpec, at: start.addingTimeInterval(100)),
+        XCTAssertTrue(engine.intervalIsRunning(epiSpec))
+        XCTAssertEqual(engine.intervalRemaining(epiSpec, at: start.addingTimeInterval(160)),
+                       120, accuracy: 0.01)   // counting from the dose, not GO
+        // Second dose resets the countdown.
+        engine.logDrug(Defaults.epinephrine, at: start.addingTimeInterval(220))
+        XCTAssertEqual(engine.intervalRemaining(epiSpec, at: start.addingTimeInterval(220)),
                        180, accuracy: 0.01)
-        XCTAssertEqual(engine.session.events.filter { $0.category == .medication }.count, 1)
+        XCTAssertEqual(engine.session.events.filter { $0.category == .medication }.count, 2)
+    }
+
+    func testStartCPRGatesCycleAndPulseCheck() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        // Before Start CPR: ring stays full, pulse checks refuse to begin,
+        // but the code clock (GO) is already running.
+        XCTAssertEqual(engine.cycleRemaining(at: start.addingTimeInterval(500)), 120, accuracy: 0.01)
+        engine.beginPulseCheck(at: start.addingTimeInterval(10))
+        XCTAssertFalse(engine.isInPulseCheck)
+        XCTAssertEqual(engine.elapsed(at: start.addingTimeInterval(500)), 500, accuracy: 0.01)
+
+        engine.startCPR(at: start.addingTimeInterval(45))
+        XCTAssertEqual(engine.cycleRemaining(at: start.addingTimeInterval(65)), 100, accuracy: 0.01)
+        XCTAssertTrue(engine.session.events.contains { $0.definitionID == "cpr.start" })
+    }
+
+    func testWeightChangeUpdatesDosesAndLogs() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        engine.updateWeight(20, at: start.addingTimeInterval(30))
+        // The change is on the record…
+        let change = engine.session.events.first { $0.definitionID == "patient.weight" }
+        XCTAssertEqual(change?.detail, "10.0 → 20.0 kg")
+        // …and the next dose computes from the NEW weight (0.01 mg/kg × 20).
+        engine.logDrug(Defaults.epinephrine, at: start.addingTimeInterval(60))
+        let epi = engine.session.events.last { $0.category == .medication }
+        XCTAssertTrue(epi?.detail?.contains("0.2 mg") ?? false,
+                      "dose detail was \(epi?.detail ?? "nil")")
     }
 
     func testRoscClosesPauseAndStopsFurtherPauses() {

@@ -81,11 +81,12 @@ public enum Defaults {
                     unit: .joulesPerKg,
                     steps: [
                         DoseStep(label: "1st", perKg: 2, maxAbsolute: 200),
-                        DoseStep(label: "Subsequent", perKg: 4, maxAbsolute: 200)
+                        DoseStep(label: "Subsequent", perKg: 4, maxAbsolute: 200),
+                        DoseStep(label: "Max", perKg: 10, maxAbsolute: 200)
                     ],
                     colorHex: CRTheme.shockHex,
                     symbol: "bolt.fill",
-                    notes: "2 J/kg then 4 J/kg. Demo values.")
+                    notes: "2 J/kg, then 4 J/kg, up to 10 J/kg. Demo values.")
     }
 
     /// Fictional sample drug — exists purely to preview the card style & editor.
@@ -115,20 +116,30 @@ public enum Defaults {
         [
             EventDefinition(id: "rhythm.check", title: "Rhythm check",
                             category: .rhythm, symbol: "waveform.path.ecg", isBuiltIn: true),
-            EventDefinition(id: "access.iv", title: "IV access",
-                            category: .access, symbol: "ivfluid.bag",
-                            subOptions: ["R hand", "L hand", "R AC", "L AC", "R foot", "L foot"],
-                            isBuiltIn: true),
-            EventDefinition(id: "access.io", title: "IO access",
-                            category: .access, symbol: "target",
-                            subOptions: ["R prox tibia", "L prox tibia", "R distal femur", "L distal femur"],
+            // Sebastian's spec: access is one parent, four limbs, no IV/IO split.
+            // The id keeps its historical "access.iv" key — stable ids outlive names.
+            EventDefinition(id: "access.iv", title: "Access",
+                            category: .access, symbol: "cross.circle.fill",
+                            subOptions: ["R leg", "R arm", "L arm", "L leg"],
                             isBuiltIn: true),
             EventDefinition(id: "airway.ett", title: "Intubation",
                             category: .airway, symbol: "lungs.fill", isBuiltIn: true),
             EventDefinition(id: "cpr.swap", title: "Compressor swap",
                             category: .cpr, symbol: "arrow.triangle.2.circlepath", isBuiltIn: true),
+            EventDefinition(id: "med.blood", title: "Blood given",
+                            category: .medication, symbol: "drop.circle.fill", isBuiltIn: true),
+            EventDefinition(id: "temp.mgmt", title: "Temp mgmt",
+                            category: .care, symbol: "thermometer.variable.and.figure",
+                            subOptions: ["Fluid warmer", "Bair Hugger", "Arctic Sun", "Warmed blankets"],
+                            isBuiltIn: true),
             EventDefinition(id: "outcome.rosc", title: "ROSC",
                             category: .outcome, symbol: "heart.fill", isBuiltIn: true),
+
+            // Non-defib shock modalities — leaves of the SHOCK bloom.
+            EventDefinition(id: "shock.sync", title: "Sync cardioversion",
+                            category: .defibrillation, symbol: "bolt.circle.fill", isBuiltIn: true),
+            EventDefinition(id: "shock.pace", title: "Pacing started",
+                            category: .defibrillation, symbol: "waveform.circle.fill", isBuiltIn: true),
 
             // Post-ROSC care set — only offered while in ROSC (id prefix
             // "rosc." is how the watch swaps the events bloom).
@@ -166,7 +177,8 @@ public enum Defaults {
                 TimerSpec(id: "timer.vitals", role: .postROSCVitals, title: "VITALS",
                           seconds: 300, colorHex: CRTheme.roscHex)
             ],
-            eventIDs: ["rhythm.check", "cpr.swap", "access.iv", "access.io", "airway.ett", "outcome.rosc"],
+            eventIDs: ["rhythm.check", "access.iv", "outcome.rosc", "cpr.swap",
+                       "airway.ett", "rosc.bolus", "med.blood", "temp.mgmt"],
             drugSetID: palsSetID
         )
     }

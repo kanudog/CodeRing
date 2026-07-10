@@ -21,6 +21,9 @@ public final class SessionEngine {
 
     public private(set) var isPaused = false
     public private(set) var isEnded = false
+    /// GO starts the code clock; compressions start when the team says so.
+    /// Until then the cycle ring sits full behind a "Start CPR" button.
+    public private(set) var cprStarted = false
     /// A pulse check is a deliberate hands-off interval: it records pause time
     /// for the CPR fraction and, on completion, closes the CPR cycle.
     public private(set) var isInPulseCheck = false
@@ -56,9 +59,8 @@ public final class SessionEngine {
                                    patient: patient,
                                    deviceName: deviceName)
         self.cycleAnchor = startDate
-        for spec in protocolDef.intervalSpecs {
-            intervalAnchors[spec.id] = startDate
-        }
+        // Drug-interval timers stay IDLE until the first dose — a countdown
+        // for a med nobody has given yet reads as a false order.
     }
 
     // MARK: - Clock
@@ -73,6 +75,7 @@ public final class SessionEngine {
     /// paused or mid-check.
     public func cycleRemaining(at now: Date) -> TimeInterval {
         guard let spec = protocolDef.cycleSpec else { return 0 }
+        guard cprStarted else { return spec.seconds }   // full ring, waiting on Start CPR
         let effectiveNow = pauseStartedAt ?? pulseCheckStartedAt ?? now
         let elapsedInCycle = max(0, effectiveNow.timeIntervalSince(cycleAnchor))
         return spec.seconds - elapsedInCycle
@@ -107,13 +110,20 @@ public final class SessionEngine {
     }
 
     /// Remaining seconds for a drug-interval timer. Negative = overdue.
+    /// Idle (drug never given) reports the full length — pair with
+    /// `intervalIsRunning` before drawing a countdown.
     public func intervalRemaining(_ spec: TimerSpec, at now: Date) -> TimeInterval {
         guard let anchor = intervalAnchors[spec.id] else { return spec.seconds }
         return spec.seconds - now.timeIntervalSince(anchor)
     }
 
+    /// False until the linked drug's first dose starts the countdown.
+    public func intervalIsRunning(_ spec: TimerSpec) -> Bool {
+        intervalAnchors[spec.id] != nil
+    }
+
     public func intervalIsOverdue(_ spec: TimerSpec, at now: Date) -> Bool {
-        intervalRemaining(spec, at: now) <= 0
+        intervalIsRunning(spec) && intervalRemaining(spec, at: now) <= 0
     }
 
     // MARK: - Guidance
@@ -125,6 +135,7 @@ public final class SessionEngine {
             return "ROSC — post-resuscitation care"
         }
         if isInPulseCheck { return "Hands off — checking pulse" }
+        if !cprStarted { return "Tap Start CPR when compressions begin" }
         if isPaused { return "CPR PAUSED — resume compressions" }
         if cycleRemaining(at: now) <= 0 { return "Pulse check overdue" }
         for spec in protocolDef.intervalSpecs where intervalIsOverdue(spec, at: now) {
@@ -168,11 +179,34 @@ public final class SessionEngine {
         append(title: "Note", detail: text, category: .custom, definitionID: nil, at: now)
     }
 
+    /// Compressions begin: anchor the first CPR cycle here. The code clock
+    /// (GO) and the compression clock are different moments on purpose.
+    public func startCPR(at now: Date = Date()) {
+        guard !cprStarted, !isEnded, !roscAchieved else { return }
+        cprStarted = true
+        cycleAnchor = now
+        append(title: "CPR started", detail: nil,
+               category: .cpr, definitionID: "cpr.start", at: now)
+    }
+
+    /// Mid-code weight correction. Everything dose-derived (mg, mL, joules)
+    /// recomputes from the session's weight at log time, so future doses and
+    /// the shock menu update instantly. The change itself goes on the record.
+    public func updateWeight(_ kg: Double, at now: Date = Date()) {
+        guard !isEnded, kg > 0 else { return }
+        let old = session.patient.weightKg
+        guard abs(old - kg) > 0.049 else { return }
+        session.patient.weightKg = kg
+        append(title: "Weight changed",
+               detail: String(format: "%.1f → %.1f kg", old, kg),
+               category: .custom, definitionID: "patient.weight", at: now)
+    }
+
     /// Start the hands-off pulse check that closes the current CPR cycle.
     /// Opens a PauseInterval (it IS interrupted CPR) and freezes the cycle
     /// clock at whatever it showed — usually zero or negative.
     public func beginPulseCheck(at now: Date = Date()) {
-        guard !isEnded, !roscAchieved, !isInPulseCheck, !isPaused else { return }
+        guard cprStarted, !isEnded, !roscAchieved, !isInPulseCheck, !isPaused else { return }
         pulseCheckStartedAt = now
         isInPulseCheck = true
         session.pauses.append(PauseInterval(start: now))
@@ -240,6 +274,7 @@ public final class SessionEngine {
         guard roscAchieved, !isEnded else { return }
         roscAchieved = false
         vitalsAnchor = nil
+        cprStarted = true      // compressions resume immediately on re-arrest
         cycleAnchor = now
         append(title: "Re-arrest", detail: "CPR resumed",
                category: .cpr, definitionID: "outcome.rearrest", at: now)

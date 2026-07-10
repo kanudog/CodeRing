@@ -1,12 +1,15 @@
 // RadialMenu.swift — the signature interaction of CodeRing.
 //
 // Anchor pucks sit on the screen perimeter. Two ways in:
-//   HOLD (0.15s) → arc of items blooms. Slide finger through — hovering reads
-//   the item name in the top chip — release ON a leaf to select it. Nothing
-//   else ever logs: parents only expand (dwell 0.3s), and lifting anywhere
-//   that isn't a leaf cancels. Dragging back to the ✕ pad at the origin is
-//   the explicit bail-out (Sebastian: accidental "Access attempt" logged).
-//   TAP → same arc opens in tap mode; items become buttons; tap outside closes.
+//   HOLD (0.15s) → arc of items blooms, every bubble labeled so the whole
+//   menu reads at a glance. Slide finger through — release ON a leaf to
+//   select it. Nothing else ever logs: parents only expand (dwell 0.3s),
+//   and lifting anywhere that isn't a leaf cancels.
+//   Inside a sub-arc, a chevron pad marks where the parent bubble was —
+//   dragging back onto it pops one level. The ✕ pad at the origin is the
+//   full bail-out (Sebastian: accidental "Access attempt" logged, twice).
+//   TAP → same arc in tap mode; items become buttons; the origin pad pops
+//   a level; tap outside closes.
 //
 // One RadialMenuModel per screen; every anchor drives the same overlay.
 
@@ -28,6 +31,13 @@ struct RadialItem: Identifiable, Equatable {
 @Observable
 final class RadialMenuModel {
 
+    /// One expanded menu level, so Back can restore it exactly.
+    private struct Level {
+        let items: [RadialItem]
+        let backPos: CGPoint?
+        let breadcrumb: String?
+    }
+
     var isOpen = false
     var tapMode = false
     var anchor: CGPoint = .zero
@@ -35,12 +45,16 @@ final class RadialMenuModel {
     var arcEnd: Double = -20
     var radius: CGFloat = 64
     var hoveredID: String? = nil
-    var hoveringCancel = false         // finger back over the origin ✕ pad
+    var hoveringCancel = false         // finger over the origin ✕ pad
+    var hoveringBack = false           // finger over the sub-arc's chevron pad
     var breadcrumb: String? = nil      // parent title while in a sub-arc
+    /// Where the parent bubble sat before it expanded — the Back target.
+    private(set) var backPos: CGPoint? = nil
 
     private(set) var items: [RadialItem] = []
-    private var pendingParent: RadialItem? = nil
+    private var stack: [Level] = []
     private var hoverStart: Date = .distantPast
+    private var backHoverStart: Date = .distantPast
     private var onSelect: ((RadialItem) -> Void)? = nil
 
     // MARK: - Lifecycle
@@ -57,7 +71,8 @@ final class RadialMenuModel {
         self.onSelect = onSelect
         self.hoveredID = nil
         self.breadcrumb = nil
-        self.pendingParent = nil
+        self.backPos = nil
+        self.stack = []
         self.isOpen = true
         WatchHaptics.play(.start)
     }
@@ -67,8 +82,10 @@ final class RadialMenuModel {
         items = []
         hoveredID = nil
         hoveringCancel = false
+        hoveringBack = false
         breadcrumb = nil
-        pendingParent = nil
+        backPos = nil
+        stack = []
         onSelect = nil
     }
 
@@ -85,22 +102,49 @@ final class RadialMenuModel {
                        y: anchor.y + radius * sin(a))
     }
 
+    /// Labels sit radially outward from their bubble so no label ever covers
+    /// an adjacent bubble. Callers clamp to screen bounds.
+    func labelPosition(forIndex i: Int, count: Int) -> CGPoint {
+        let a = angle(forIndex: i, count: count) * .pi / 180
+        let r = radius + 30
+        return CGPoint(x: anchor.x + r * cos(a),
+                       y: anchor.y + r * sin(a))
+    }
+
     // MARK: - Hold-drag flow
 
     func updateDrag(_ location: CGPoint) {
         guard isOpen, !tapMode else { return }
 
-        // Finger back over the origin pad = armed to cancel.
+        // Finger back over the origin pad = armed to cancel everything.
         let fromAnchor = hypot(location.x - anchor.x, location.y - anchor.y)
         guard fromAnchor > 28 else {
             if !hoveringCancel {
                 hoveringCancel = true
                 WatchHaptics.play(.click)
             }
+            hoveringBack = false
             if hoveredID != nil { hoveredID = nil }
             return
         }
         hoveringCancel = false
+
+        // Sub-arc: dragging onto the parent's old spot pops one level.
+        if let back = backPos {
+            let d = hypot(location.x - back.x, location.y - back.y)
+            if d < 24 {
+                if !hoveringBack {
+                    hoveringBack = true
+                    backHoverStart = Date()
+                    WatchHaptics.play(.click)
+                } else if Date().timeIntervalSince(backHoverStart) > 0.15 {
+                    pop()
+                }
+                if hoveredID != nil { hoveredID = nil }
+                return
+            }
+        }
+        hoveringBack = false
 
         var nearest: (item: RadialItem, dist: CGFloat)? = nil
         for (i, item) in items.enumerated() {
@@ -124,7 +168,9 @@ final class RadialMenuModel {
     }
 
     private func expand(_ parent: RadialItem, children: [RadialItem]) {
-        pendingParent = parent
+        let parentIndex = items.firstIndex(of: parent)
+        stack.append(Level(items: items, backPos: backPos, breadcrumb: breadcrumb))
+        backPos = parentIndex.map { position(forIndex: $0, count: items.count) }
         breadcrumb = parent.title
         items = children
         hoveredID = nil
@@ -132,9 +178,21 @@ final class RadialMenuModel {
         WatchHaptics.play(.directionUp)
     }
 
+    /// Back one level — restores the parent arc exactly as it was.
+    private func pop() {
+        guard let level = stack.popLast() else { return }
+        items = level.items
+        backPos = level.backPos
+        breadcrumb = level.breadcrumb
+        hoveredID = nil
+        hoveringBack = false
+        hoverStart = Date()
+        WatchHaptics.play(.directionDown)
+    }
+
     /// Finger lifted. ONLY a hovered LEAF fires — parents just expand, and
-    /// lifting on dead space, the ✕ pad, or a parent records nothing. An
-    /// accidental hover must never become a logged clinical event.
+    /// lifting on dead space, the ✕ pad, the back pad, or a parent records
+    /// nothing. An accidental hover must never become a logged clinical event.
     func endDrag() {
         guard isOpen, !tapMode else { return }
         if let item = items.first(where: { $0.id == hoveredID }),
@@ -149,7 +207,9 @@ final class RadialMenuModel {
     func tapSelect(_ item: RadialItem) {
         guard tapMode else { return }
         if let children = item.children, !children.isEmpty {
-            pendingParent = item
+            let parentIndex = items.firstIndex(of: item)
+            stack.append(Level(items: items, backPos: backPos, breadcrumb: breadcrumb))
+            backPos = parentIndex.map { position(forIndex: $0, count: items.count) }
             breadcrumb = item.title
             items = children
             WatchHaptics.play(.directionUp)
@@ -159,10 +219,10 @@ final class RadialMenuModel {
         }
     }
 
-    /// In tap mode, tapping the anchor pops one level, or closes at root.
+    /// In tap mode, tapping the origin pad pops one level, or closes at root.
     func tapAnchor() {
         guard tapMode else { return }
-        close()
+        if stack.isEmpty { close() } else { pop() }
     }
 
     private func fire(_ item: RadialItem) {
@@ -248,11 +308,11 @@ struct RadialMenuOverlay: View {
 
     var body: some View {
         GeometryReader { geo in
-            overlayContent(width: geo.size.width)
+            overlayContent(size: geo.size)
         }
     }
 
-    private func overlayContent(width: CGFloat) -> some View {
+    private func overlayContent(size: CGSize) -> some View {
         ZStack {
             if model.isOpen {
                 Color.black.opacity(0.62)
@@ -266,20 +326,43 @@ struct RadialMenuOverlay: View {
                         .transition(.scale.combined(with: .opacity))
                 }
 
-                // Name tag riding the hovered bubble — what your finger is on,
-                // right where you're looking (the top readout stays too).
-                if !model.tapMode,
-                   let i = model.items.firstIndex(where: { $0.id == model.hoveredID }) {
-                    let p = model.position(forIndex: i, count: model.items.count)
-                    Text(model.items[i].title)
-                        .font(.system(size: 10, weight: .heavy, design: .rounded))
-                        .foregroundStyle(CRTheme.text)
+                // Every bubble carries its name — the whole arc reads at a
+                // glance before the finger commits to a direction.
+                ForEach(Array(model.items.enumerated()), id: \.element.id) { i, item in
+                    let hovered = model.hoveredID == item.id
+                    let p = model.labelPosition(forIndex: i, count: model.items.count)
+                    Text(item.title)
+                        .font(.system(size: 8, weight: .heavy, design: .rounded))
+                        .foregroundStyle(hovered ? item.color : CRTheme.text)
                         .lineLimit(1)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(CRTheme.surfaceHi))
-                        .position(x: min(max(p.x, 40), width - 40), y: max(12, p.y - 36))
+                        .minimumScaleFactor(0.55)
+                        .frame(maxWidth: 54)
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(CRTheme.bg.opacity(0.72)))
+                        .position(x: min(max(p.x, 27), size.width - 27),
+                                  y: max(10, p.y))
                         .allowsHitTesting(false)
+                }
+
+                // Back pad — the parent bubble's old spot; drag onto it (or
+                // tap it in tap mode) to pop one level.
+                if let back = model.backPos {
+                    ZStack {
+                        Circle()
+                            .fill(model.hoveringBack ? CRTheme.surfaceHi : CRTheme.surface.opacity(0.7))
+                        Circle()
+                            .strokeBorder(.white.opacity(model.hoveringBack ? 0.8 : 0.3),
+                                          lineWidth: 1.5)
+                        Image(systemName: "chevron.backward")
+                            .font(.system(size: 11, weight: .heavy))
+                            .foregroundStyle(model.hoveringBack ? CRTheme.text : CRTheme.textDim)
+                    }
+                    .frame(width: 30, height: 30)
+                    .scaleEffect(model.hoveringBack ? 1.2 : 1.0)
+                    .animation(.spring(duration: 0.15), value: model.hoveringBack)
+                    .position(back)
+                    .onTapGesture { model.tapAnchor() }
                 }
 
                 // ✕ pad at the origin — drag back here (or tap in tap mode)
@@ -330,12 +413,13 @@ struct RadialMenuOverlay: View {
 
     private var hoveredTitle: String {
         if model.hoveringCancel { return "Release to cancel" }
+        if model.hoveringBack { return "Back" }
         return model.items.first { $0.id == model.hoveredID }?.title
             ?? (model.tapMode ? "Tap to log" : "Slide + release on an item")
     }
 
     private var hoveredColor: Color {
-        if model.hoveringCancel { return CRTheme.textDim }
+        if model.hoveringCancel || model.hoveringBack { return CRTheme.textDim }
         return model.items.first { $0.id == model.hoveredID }?.color ?? CRTheme.text
     }
 

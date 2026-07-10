@@ -55,18 +55,24 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
+                // The one button that matters — a bullseye, like GO.
                 Button(action: startAction) {
-                    VStack(spacing: 4) {
-                        Image(systemName: "bolt.heart.fill")
-                            .font(.system(size: 30, weight: .bold))
-                        Text("START CODE")
-                            .font(.system(size: 15, weight: .heavy, design: .rounded))
-                            .tracking(1.0)
+                    ZStack {
+                        Circle().fill(CRTheme.cpr)
+                        Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1.5)
+                        VStack(spacing: 2) {
+                            Image(systemName: "bolt.heart.fill")
+                                .font(.system(size: 26, weight: .bold))
+                            Text("START")
+                                .font(.system(size: 14, weight: .heavy, design: .rounded))
+                                .tracking(1.2)
+                            Text("CODE")
+                                .font(.system(size: 14, weight: .heavy, design: .rounded))
+                                .tracking(1.2)
+                        }
+                        .foregroundStyle(CRTheme.bg)
                     }
-                    .foregroundStyle(CRTheme.bg)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 86)
-                    .background(RoundedRectangle(cornerRadius: 18).fill(CRTheme.cpr))
+                    .frame(width: 108, height: 108)
                 }
                 .buttonStyle(.plain)
 
@@ -119,6 +125,7 @@ struct HomeView: View {
 
 struct WatchSessionsList: View {
     private let store = CodeStore.shared
+    @State private var confirmClear = false
 
     var body: some View {
         Group {
@@ -127,29 +134,71 @@ struct WatchSessionsList: View {
                     .font(.system(size: 13, design: .rounded))
                     .foregroundStyle(CRTheme.textDim)
             } else {
-                List(store.sessions) { session in
-                    NavigationLink {
-                        SummaryView(session: session, onDone: nil)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(session.startDate, style: .date)
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            HStack(spacing: 6) {
-                                Text(crClock(session.duration(at: session.endDate ?? session.startDate)))
-                                    .font(.system(size: 11, design: .rounded).monospacedDigit())
-                                    .foregroundStyle(CRTheme.textDim)
-                                if session.roscDate != nil {
-                                    Text("ROSC")
-                                        .font(.system(size: 9, weight: .heavy, design: .rounded))
-                                        .foregroundStyle(CRTheme.rosc)
-                                }
-                            }
+                List {
+                    ForEach(store.sessions) { session in
+                        NavigationLink {
+                            SummaryView(session: session, onDone: nil)
+                        } label: {
+                            tile(session)
                         }
                     }
+
+                    // Clear lives at the very bottom, destructive and
+                    // double-confirmed — codes are the whole record.
+                    Button(role: .destructive) {
+                        confirmClear = true
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Label("Clear all codes", systemImage: "trash.fill")
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                            Spacer()
+                        }
+                    }
+                    .listRowBackground(RoundedRectangle(cornerRadius: 10)
+                        .fill(CRTheme.med.opacity(0.18)))
                 }
             }
         }
         .navigationTitle("Recent")
+        .confirmationDialog("Delete all saved codes?", isPresented: $confirmClear) {
+            Button("Delete everything", role: .destructive) {
+                store.clearAllSessions()
+                WatchHaptics.play(.failure)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This permanently removes every saved code from this watch. Codes already synced to the phone stay there.")
+        }
+    }
+
+    /// Code type · weight · length · outcome — the tile answers "which code
+    /// was this" without opening it.
+    private func tile(_ session: CodeSession) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Text(session.protocolName)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(CRTheme.text)
+                Spacer()
+                if session.roscDate != nil {
+                    Text("ROSC")
+                        .font(.system(size: 9, weight: .heavy, design: .rounded))
+                        .foregroundStyle(CRTheme.rosc)
+                } else {
+                    Text("NO ROSC")
+                        .font(.system(size: 9, weight: .heavy, design: .rounded))
+                        .foregroundStyle(CRTheme.textDim)
+                }
+            }
+            Text("\(session.patient.weightLabel) · \(session.startDate.formatted(date: .abbreviated, time: .shortened))")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(CRTheme.textDim)
+            Text("Code length: \(crClock(session.duration(at: session.endDate ?? session.startDate)))")
+                .font(.system(size: 10, weight: .semibold, design: .rounded).monospacedDigit())
+                .foregroundStyle(CRTheme.cpr)
+        }
+        .padding(.vertical, 1)
     }
 }
 
@@ -158,35 +207,80 @@ struct WatchSessionsList: View {
 struct WatchSettingsView: View {
     private let store = CodeStore.shared
 
-    private var haptics: Binding<Bool> {
-        Binding(get: { store.settings.hapticsEnabled },
-                set: { on in
+    /// One binding per settings field, all funneled through CodeStore.
+    private func setting<T>(_ get: @escaping (AppSettings) -> T,
+                            _ set: @escaping (inout AppSettings, T) -> Void) -> Binding<T> {
+        Binding(get: { get(store.settings) },
+                set: { value in
                     var s = store.settings
-                    s.hapticsEnabled = on
-                    store.updateSettings(s)
-                    WatchHaptics.enabled = on
-                })
-    }
-
-    private var metronomeSound: Binding<Bool> {
-        Binding(get: { store.settings.metronomeSoundOn },
-                set: { on in
-                    var s = store.settings
-                    s.metronomeSoundOn = on
+                    set(&s, value)
                     store.updateSettings(s)
                 })
     }
 
     var body: some View {
         Form {
-            Toggle("Haptics", isOn: haptics)
-            Toggle("Metronome sound", isOn: metronomeSound)
+            Section("Display") {
+                Toggle("Keep screen awake", isOn: setting({ $0.keepScreenOn },
+                                                          { $0.keepScreenOn = $1 }))
+                Text("Keeps the app running and frontmost for the whole code, and shows the timers dimmed instead of a blank screen on wrist-down (Always-On models). Wake behavior also depends on the watch's Display settings.")
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundStyle(CRTheme.textDim)
+            }
+
+            Section("Metronome") {
+                Toggle("Sound", isOn: setting({ $0.metronomeSoundOn },
+                                              { $0.metronomeSoundOn = $1 }))
+                Picker("Pitch", selection: setting({ $0.metronomePitch },
+                                                   { $0.metronomePitch = $1 })) {
+                    ForEach(MetronomePitch.allCases, id: \.self) { p in
+                        Text(p.label).tag(p)
+                    }
+                }
+                Text("\(store.settings.metronomeBPM) bpm · haptic click every beat")
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundStyle(CRTheme.textDim)
+            }
+
+            Section("Haptics") {
+                Toggle("Haptics", isOn: setting({ $0.hapticsEnabled },
+                                                { $0.hapticsEnabled = $1 })
+                    .onChange { WatchHaptics.enabled = $0 })
+
+                hapticRow("Pulse check due", \.hapticPulseCheckDue) { $0.hapticPulseCheckDue = $1 }
+                hapticRow("Med due", \.hapticMedDue) { $0.hapticMedDue = $1 }
+                hapticRow("Cycle done · swap", \.hapticCycleComplete) { $0.hapticCycleComplete = $1 }
+                Text("Pick a rhythm per cue — tap a row's pattern to feel it.")
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundStyle(CRTheme.textDim)
+            }
+
             Section {
-                Text("Metronome: \(store.settings.metronomeBPM) bpm. Edit drugs, events, and timer lengths in the iPhone app.")
+                Text("Edit drugs, colors, events, and timer lengths in the iPhone app.")
                     .font(.system(size: 11, design: .rounded))
                     .foregroundStyle(CRTheme.textDim)
             }
         }
         .navigationTitle("Settings")
+    }
+
+    private func hapticRow(_ title: String,
+                           _ keyPath: KeyPath<AppSettings, HapticPattern>,
+                           _ set: @escaping (inout AppSettings, HapticPattern) -> Void) -> some View {
+        Picker(title, selection: setting({ $0[keyPath: keyPath] }, set)
+            .onChange { WatchHaptics.play($0) }) {   // preview on select
+            ForEach(HapticPattern.allCases, id: \.self) { p in
+                Text(p.label).tag(p)
+            }
+        }
+    }
+}
+
+private extension Binding {
+    /// Runs a side effect after each write — settings rows use it to apply
+    /// or preview the new value immediately.
+    func onChange(_ action: @escaping (Value) -> Void) -> Binding<Value> {
+        Binding(get: { wrappedValue },
+                set: { wrappedValue = $0; action($0) })
     }
 }
