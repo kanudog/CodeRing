@@ -581,45 +581,48 @@ struct LiveSessionView: View {
     // MARK: - Anchors
 
     private func anchors(size: CGSize) -> some View {
-        let y = size.height - 36   // high enough that labels never clip the bezel
+        // Side anchors ride higher: their two-line labels need clearance
+        // from the bottom bezel; the arcs lay themselves out (RadialMenu
+        // fits spacing/radius to the screen automatically).
+        let sideY = size.height - 46
+        let centerY = size.height - 36
         return ZStack {
             // Rhythm / Code — RED, bottom-left. Antiarrhythmics + code meds.
             RadialAnchor(id: "code",
-                         center: CGPoint(x: size.width * 0.16, y: y),
+                         center: CGPoint(x: size.width * 0.15, y: sideY),
                          symbol: "waveform.path.ecg.rectangle", label: "Rhythm/Code",
                          color: CRTheme.med,
                          items: rhythmCodeItems,
-                         arcStart: -96, arcEnd: -4, radius: 74,
+                         radius: 84, bounds: size,
                          model: menu, onSelect: select)
 
             // Events — VIOLET, bottom-center.
             RadialAnchor(id: "events",
-                         center: CGPoint(x: size.width * 0.5, y: y),
+                         center: CGPoint(x: size.width * 0.5, y: centerY),
                          symbol: "square.grid.2x2.fill", label: "Events",
                          color: CRTheme.cpr,
                          items: eventsItems,
-                         arcStart: -168, arcEnd: -12, radius: 74,
+                         radius: 76, bounds: size,
                          model: menu, onSelect: select)
 
             // Volume / Support — BLUE, bottom-right.
             RadialAnchor(id: "support",
-                         center: CGPoint(x: size.width * 0.84, y: y),
+                         center: CGPoint(x: size.width * 0.85, y: sideY),
                          symbol: "drop.fill", label: "Volume/Support",
                          color: CRTheme.volume,
                          items: supportItems,
-                         arcStart: -90, arcEnd: -178, radius: 84,
+                         radius: 84, bounds: size,
                          model: menu, onSelect: select)
 
-            // Shock — YELLOW, just right of the main ring (fully on-screen,
-            // not clipped at the bezel). Tap = next defib energy; hold =
-            // Defib ladder / Cardiovert, blooming left into open space.
+            // Shock — YELLOW, upper-right with clear air between it and the
+            // ring. Tap = next defib energy; hold = Defib ladder / Cardiovert.
             if engine.cprStarted, !engine.roscAchieved {
                 RadialAnchor(id: "shock",
-                             center: CGPoint(x: size.width * 0.82, y: size.height * 0.34),
+                             center: CGPoint(x: size.width - 23, y: size.height * 0.24),
                              symbol: "bolt.fill", label: "Shock",
                              color: CRTheme.shock,
                              items: shockItems,
-                             arcStart: -160, arcEnd: -230, radius: 60,
+                             radius: 62, bounds: size,
                              tapAction: quickShock,
                              model: menu, onSelect: select)
             }
@@ -669,7 +672,9 @@ struct LiveSessionView: View {
     }
 
     /// Volume/Support — 12 o'clock counter-clockwise: fluids, dextrose,
-    /// calcium, bicarb, more.
+    /// calcium, bicarb, more. The array is REVERSED because arcs assign
+    /// index 0 to their lowest angle; for the right-side anchor the last
+    /// element lands at 12 o'clock and earlier ones sweep counter-clockwise.
     private func supportItems() -> [RadialItem] {
         let blue = CRTheme.volumeHex
         var fluidKids: [RadialItem] = [
@@ -694,7 +699,7 @@ struct LiveSessionView: View {
         items.append(contentsOf: [Defaults.dextroseID, Defaults.calciumID, Defaults.bicarbID].compactMap(drugItem))
         items.append(RadialItem(id: "grp:more", title: "More", symbol: "ellipsis",
                                 colorHex: blue, children: more))
-        return items
+        return items.reversed()
     }
 
     private let limbNames = ["L arm", "L leg", "R arm", "R leg"]

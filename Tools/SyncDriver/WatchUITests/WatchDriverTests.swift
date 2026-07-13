@@ -25,6 +25,68 @@ final class WatchDriverTests: XCTestCase {
         XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10), "weight page not shown")
     }
 
+    /// v7: auto-fit arcs + nested walking. One continuous hold descends
+    /// Access → IV → limb; fluids expands to Blood/10/20; Defib to rungs.
+    /// Ends the code so the phone record proves every leaf.
+    func testV7_nested() throws {
+        ring.terminate(); sleep(1); ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START'")).firstMatch.tap()
+        ring.buttons["Cardiac Arrest"].tap()
+        XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10))
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 8)); go.tap()
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch.tap()
+        XCTAssertTrue(ring.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'NEXT PULSE CHECK'")).firstMatch.waitForExistence(timeout: 8))
+        sleep(2)   // shot: live layout (raised anchors, shock gap)
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        let sideY = f.height - 46, centerY = f.height - 36
+
+        // 1 — Rhythm/Code: epi is index 0 ≈ straight up at r≈108.
+        let cx = f.width * 0.15
+        at(cx, sideY).press(forDuration: 0.5, thenDragTo: at(cx - 8, sideY - 108),
+                            withVelocity: .slow, thenHoldForDuration: 1.4)
+        sleep(1)
+
+        // 2 — Volume/Support: fluids sits at 12 o'clock (r≈108); dwell
+        // expands Blood/10/20 outside it; rehover lands on 20 mL/kg.
+        let vx = f.width * 0.85
+        at(vx, sideY).press(forDuration: 0.5, thenDragTo: at(vx + 8, sideY - 108),
+                            withVelocity: .slow, thenHoldForDuration: 3.6)
+        sleep(1)
+
+        // 3 — Events: park on IV's FUTURE position; the hold hovers Access
+        // (nearest), expands to IV/IO, rehovers IV, expands limbs, rehovers
+        // a limb — one continuous gesture, two levels deep.
+        let ex = f.width * 0.5
+        at(ex, centerY).press(forDuration: 0.5, thenDragTo: at(ex - 77, centerY - 60),
+                              withVelocity: .slow, thenHoldForDuration: 5.6)
+        sleep(1)
+
+        // 4 — Shock: park on Defib (down-left of the puck); dwell expands
+        // the joule rungs; rehover lands on the middle rung.
+        let shx = f.width - 23, shy = f.height * 0.375
+        at(shx, shy).press(forDuration: 0.5, thenDragTo: at(shx - 60, shy + 17),
+                           withVelocity: .slow, thenHoldForDuration: 3.6)
+        sleep(2)   // shot: chips in item colors
+
+        // End & sync.
+        let topButtons = ring.buttons.allElementsBoundByIndex.filter {
+            $0.frame.minY >= 0 && $0.frame.midY < 60 && $0.isHittable
+        }
+        topButtons.max(by: { $0.frame.maxX < $1.frame.maxX })?.tap()
+        let end = ring.buttons["End & review"]
+        XCTAssertTrue(end.waitForExistence(timeout: 10))
+        end.tap()
+        sleep(4)
+    }
+
     /// Focused: open the Shock-by-ring bloom FIRST so the sim's always-on
     /// hasn't dimmed, and hold it open for the external capture.
     func testV6_shock() throws {

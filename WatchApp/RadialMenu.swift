@@ -39,11 +39,15 @@ struct RadialItem: Identifiable, Equatable {
 @Observable
 final class RadialMenuModel {
 
-    /// One expanded menu level, so Back can restore it exactly.
+    /// One expanded menu level, so Back can restore it — including the arc
+    /// geometry that level was laid out with.
     private struct Level {
         let items: [RadialItem]
         let backPos: CGPoint?
         let breadcrumb: String?
+        let arcStart: Double
+        let arcEnd: Double
+        let radius: CGFloat
     }
 
     var isOpen = false
@@ -61,6 +65,9 @@ final class RadialMenuModel {
 
     private(set) var items: [RadialItem] = []
     private var stack: [Level] = []
+    private var bounds: CGSize = .zero
+    private var baseRadius: CGFloat = 74
+    private var lastLocation: CGPoint? = nil
     private var backHoverStart: Date = .distantPast
     /// Time-driven expansion: drag events stop for a motionless finger, so
     /// dwell must run on a clock, not on the next touch delta.
@@ -69,13 +76,12 @@ final class RadialMenuModel {
 
     // MARK: - Lifecycle
 
-    func open(anchor: CGPoint, arcStart: Double, arcEnd: Double, radius: CGFloat,
+    func open(anchor: CGPoint, radius: CGFloat, bounds: CGSize,
               items: [RadialItem], tapMode: Bool,
               onSelect: @escaping (RadialItem) -> Void) {
         self.anchor = anchor
-        self.arcStart = arcStart
-        self.arcEnd = arcEnd
-        self.radius = radius
+        self.bounds = bounds
+        self.baseRadius = radius
         self.items = items
         self.tapMode = tapMode
         self.onSelect = onSelect
@@ -83,6 +89,8 @@ final class RadialMenuModel {
         self.breadcrumb = nil
         self.backPos = nil
         self.stack = []
+        self.lastLocation = nil
+        fitArc(count: items.count, preferredCenter: nil, startRadius: radius)
         self.isOpen = true
         WatchHaptics.play(.start)
     }
@@ -98,10 +106,71 @@ final class RadialMenuModel {
         breadcrumb = nil
         backPos = nil
         stack = []
+        lastLocation = nil
         onSelect = nil
     }
 
     // MARK: - Geometry
+    // The arc LAYS ITSELF OUT: every level keeps a minimum chord between
+    // bubbles (no overlap, no hover flapping between neighbors) and only
+    // uses angles whose bubbles land fully on screen — growing the radius
+    // when a level needs more room than the current ring offers.
+
+    private let minChord: CGFloat = 47        // bubble Ø38 + breathing room
+    private let maxRadius: CGFloat = 118
+
+    /// Degrees at which bubbles remain fully on screen for a given radius —
+    /// the contiguous run nearest `preferredCenter` (or straight up).
+    private func validWindow(radius r: CGFloat, preferredCenter: Double) -> ClosedRange<Double>? {
+        var runs: [(lo: Double, hi: Double)] = []
+        var runStart: Double? = nil
+        var deg = -260.0
+        while deg <= 30 {
+            let a = deg * .pi / 180
+            let p = CGPoint(x: anchor.x + r * cos(a), y: anchor.y + r * sin(a))
+            let ok = p.x >= 22 && p.x <= bounds.width - 22 &&
+                     p.y >= 16 && p.y <= bounds.height - 18
+            if ok, runStart == nil { runStart = deg }
+            if !ok, let s = runStart { runs.append((s, deg - 3)); runStart = nil }
+            deg += 3
+        }
+        if let s = runStart { runs.append((s, 30)) }
+        guard !runs.isEmpty else { return nil }
+        let best = runs.min { a, b in
+            let da = abs(preferredCenter - (a.lo + a.hi) / 2)
+            let db = abs(preferredCenter - (b.lo + b.hi) / 2)
+            return da < db
+        }!
+        return best.lo...best.hi
+    }
+
+    /// Choose arcStart/arcEnd/radius for `count` bubbles: enough angular
+    /// spacing for the minimum chord, centered on the parent's direction,
+    /// clamped to the on-screen window; radius grows until the span fits.
+    private func fitArc(count: Int, preferredCenter: Double?, startRadius: CGFloat) {
+        let want = preferredCenter ?? -90
+        var r = startRadius
+        while true {
+            guard let window = validWindow(radius: r, preferredCenter: want) else {
+                r -= 12
+                if r < 40 { radius = startRadius; arcStart = -160; arcEnd = -20; return }
+                continue
+            }
+            let spacing = Double(2 * asin(min(1, minChord / (2 * r)))) * 180 / .pi
+            let span = spacing * Double(max(0, count - 1))
+            let available = window.upperBound - window.lowerBound
+            if span <= available || r >= maxRadius {
+                let usable = min(span, available)
+                let half = usable / 2
+                let center = min(max(want, window.lowerBound + half), window.upperBound - half)
+                radius = r
+                arcStart = center - half
+                arcEnd = center + half
+                return
+            }
+            r += 12
+        }
+    }
 
     func angle(forIndex i: Int, count: Int) -> Double {
         guard count > 1 else { return (arcStart + arcEnd) / 2 }
@@ -114,26 +183,41 @@ final class RadialMenuModel {
                        y: anchor.y + radius * sin(a))
     }
 
-    /// Labels sit radially outward from their bubble so no label ever covers
-    /// an adjacent bubble — EXCEPT at the shallow ends of the arc, where
-    /// "outward" is sideways and lands on the neighbor: those go UNDER their
-    /// bubble instead (Sebastian: Pause/More labels overlapped bubbles).
+    /// Labels sit radially OUTSIDE their bubble so no label ever covers an
+    /// adjacent bubble. Where outward would clip the screen or run sideways
+    /// into a neighbor, the label tries below, then above, then beside its
+    /// own bubble — whichever spot is actually CLEAR of the other bubbles.
     func labelPosition(forIndex i: Int, count: Int) -> CGPoint {
         let deg = angle(forIndex: i, count: count)
         let a = deg * .pi / 180
-        if abs(sin(a)) < 0.45 {
-            let bubble = position(forIndex: i, count: count)
-            return CGPoint(x: bubble.x, y: bubble.y + 27)
+        let bubble = position(forIndex: i, count: count)
+        let others = (0..<count).filter { $0 != i }
+            .map { position(forIndex: $0, count: count) }
+        func clear(_ p: CGPoint) -> Bool {
+            p.y >= 12 && p.y <= bounds.height - 10 &&
+            others.allSatisfy { hypot($0.x - p.x, $0.y - p.y) > 32 }
         }
+        func stacked() -> CGPoint {
+            let below = CGPoint(x: bubble.x, y: bubble.y + 27)
+            if clear(below) { return below }
+            let above = CGPoint(x: bubble.x, y: bubble.y - 27)
+            if clear(above) { return above }
+            return CGPoint(x: bubble.x + (cos(a) >= 0 ? 36 : -36), y: bubble.y)
+        }
+        // Shallow arc ends: "outward" is sideways — stack instead.
+        if abs(sin(a)) < 0.45 { return stacked() }
         let r = radius + 30
-        return CGPoint(x: anchor.x + r * cos(a),
-                       y: anchor.y + r * sin(a))
+        let p = CGPoint(x: anchor.x + r * cos(a), y: anchor.y + r * sin(a))
+        // Off the top edge → fall back to stacking.
+        if p.y < 14 { return stacked() }
+        return p
     }
 
     // MARK: - Hold-drag flow
 
     func updateDrag(_ location: CGPoint) {
         guard isOpen, !tapMode else { return }
+        lastLocation = location
 
         // Finger back over the origin pad = armed to cancel everything.
         let fromAnchor = hypot(location.x - anchor.x, location.y - anchor.y)
@@ -197,21 +281,47 @@ final class RadialMenuModel {
         }
     }
 
-    /// Back target sits NEXT TO the ✕ pad at the origin — one place to look
-    /// for both exits, offset toward screen center so it never clips.
+    /// Back target sits beside the ✕ pad at the origin, on whichever side
+    /// keeps it CLEAR of the child bubbles — a back pad inside the bloom
+    /// swallows hovers meant for items (bit the shock menu, whose arc and
+    /// "toward screen center" were the same direction).
     private func backPadPosition() -> CGPoint {
-        CGPoint(x: anchor.x + (anchor.x < 60 ? 38 : -38), y: anchor.y)
+        let towardCenter: CGFloat = anchor.x < bounds.width / 2 ? 38 : -38
+        let candidates = [
+            CGPoint(x: anchor.x + towardCenter, y: anchor.y),
+            CGPoint(x: anchor.x - towardCenter, y: anchor.y),
+            CGPoint(x: anchor.x, y: anchor.y + 38),
+            CGPoint(x: anchor.x, y: anchor.y - 38)
+        ]
+        let bubbles = (0..<items.count).map { position(forIndex: $0, count: items.count) }
+        func clearance(_ p: CGPoint) -> CGFloat {
+            guard p.x >= 20, p.x <= bounds.width - 20,
+                  p.y >= 16, p.y <= bounds.height - 16 else { return -1 }
+            return bubbles.map { hypot($0.x - p.x, $0.y - p.y) }.min() ?? 999
+        }
+        return candidates.max { clearance($0) < clearance($1) } ?? candidates[0]
     }
 
     private func expand(_ parent: RadialItem, children: [RadialItem]) {
         dwellTask?.cancel()
         dwellTask = nil
-        stack.append(Level(items: items, backPos: backPos, breadcrumb: breadcrumb))
-        backPos = backPadPosition()
+        // Parent's direction BEFORE the arc mutates — the child arc centers on it.
+        let parentAngle = items.firstIndex(of: parent).map { angle(forIndex: $0, count: items.count) }
+        stack.append(Level(items: items, backPos: backPos, breadcrumb: breadcrumb,
+                           arcStart: arcStart, arcEnd: arcEnd, radius: radius))
         breadcrumb = parent.title
         items = children
         hoveredID = nil
+        // Children ring OUTSIDE the parent level, re-spaced for their count;
+        // the back pad picks its spot AFTER layout so it dodges the bubbles.
+        fitArc(count: children.count, preferredCenter: parentAngle,
+               startRadius: min(radius + 22, maxRadius))
+        backPos = backPadPosition()
         WatchHaptics.play(.directionUp)
+        // A motionless finger gets no new drag events, so re-evaluate hover
+        // at the last known spot — that's what lets a continuous hold walk
+        // DOWN through nested levels (access → IV → limb).
+        if !tapMode, let loc = lastLocation { updateDrag(loc) }
     }
 
     /// Back one level — restores the parent arc exactly as it was.
@@ -222,6 +332,9 @@ final class RadialMenuModel {
         items = level.items
         backPos = level.backPos
         breadcrumb = level.breadcrumb
+        arcStart = level.arcStart
+        arcEnd = level.arcEnd
+        radius = level.radius
         hoveredID = nil
         hoveringBack = false
         WatchHaptics.play(.directionDown)
@@ -244,10 +357,14 @@ final class RadialMenuModel {
     func tapSelect(_ item: RadialItem) {
         guard tapMode else { return }
         if let children = item.children, !children.isEmpty {
-            stack.append(Level(items: items, backPos: backPos, breadcrumb: breadcrumb))
-            backPos = backPadPosition()
+            let parentAngle = items.firstIndex(of: item).map { angle(forIndex: $0, count: items.count) }
+            stack.append(Level(items: items, backPos: backPos, breadcrumb: breadcrumb,
+                               arcStart: arcStart, arcEnd: arcEnd, radius: radius))
             breadcrumb = item.title
             items = children
+            fitArc(count: children.count, preferredCenter: parentAngle,
+                   startRadius: min(radius + 22, maxRadius))
+            backPos = backPadPosition()
             WatchHaptics.play(.directionUp)
         } else {
             fire(item)
@@ -281,9 +398,8 @@ struct RadialAnchor: View {
     let label: String
     let color: Color
     let items: () -> [RadialItem]
-    let arcStart: Double
-    let arcEnd: Double
-    let radius: CGFloat
+    let radius: CGFloat                    // base ring; the model grows it to fit
+    let bounds: CGSize                     // screen box the arc must stay inside
     var tapAction: (() -> Void)? = nil     // set → tap runs this instead of opening
     let model: RadialMenuModel
     let onSelect: (RadialItem) -> Void
@@ -298,9 +414,12 @@ struct RadialAnchor: View {
                 .frame(width: 42, height: 42)
                 .background(Circle().fill(color))
                 .overlay(Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1))
-            Text(label.uppercased())
+            // "Rhythm/Code" → two stacked lines; single words stay one line.
+            Text(label.uppercased().replacingOccurrences(of: "/", with: "\n"))
                 .font(.system(size: 8, weight: .heavy, design: .rounded))
                 .tracking(0.6)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
                 .foregroundStyle(CRTheme.textDim)
         }
         .opacity(isActive ? 0.35 : 1)
@@ -316,9 +435,8 @@ struct RadialAnchor: View {
             .onChanged { value in
                 switch value {
                 case .first(true):
-                    model.open(anchor: center, arcStart: arcStart, arcEnd: arcEnd,
-                               radius: radius, items: items(), tapMode: false,
-                               onSelect: onSelect)
+                    model.open(anchor: center, radius: radius, bounds: bounds,
+                               items: items(), tapMode: false, onSelect: onSelect)
                 case .second(true, let drag):
                     if let drag { model.updateDrag(drag.location) }
                 default:
@@ -335,9 +453,8 @@ struct RadialAnchor: View {
         if let tapAction {
             tapAction()
         } else {
-            model.open(anchor: center, arcStart: arcStart, arcEnd: arcEnd,
-                       radius: radius, items: items(), tapMode: true,
-                       onSelect: onSelect)
+            model.open(anchor: center, radius: radius, bounds: bounds,
+                       items: items(), tapMode: true, onSelect: onSelect)
         }
     }
 }
@@ -446,7 +563,10 @@ struct RadialMenuOverlay: View {
                 .padding(.vertical, 5)
                 .background(Capsule().fill(CRTheme.surfaceHi))
                 .frame(maxWidth: .infinity)
-                .position(x: model.anchor.x < 100 ? 110 : 90, y: 24)
+                // The chip dodges the arc: top by default, bottom whenever
+                // bubbles climb high enough that it would sit on their labels.
+                .position(x: model.anchor.x < 100 ? 110 : 90,
+                          y: readoutAtBottom(size) ? size.height - 16 : 24)
             }
         }
         .animation(.spring(duration: 0.22), value: model.isOpen)
@@ -454,6 +574,14 @@ struct RadialMenuOverlay: View {
         .allowsHitTesting(model.isOpen && model.tapMode)
         // In hold mode the anchor's own gesture keeps ownership of the touch,
         // so the overlay must not intercept — hence hit testing only in tap mode.
+    }
+
+    /// True when any bubble (or its outward label) reaches the top band.
+    private func readoutAtBottom(_ size: CGSize) -> Bool {
+        let n = model.items.count
+        guard n > 0 else { return false }
+        let highest = (0..<n).map { model.position(forIndex: $0, count: n).y }.min() ?? 999
+        return highest < 78
     }
 
     private var hoveredTitle: String {
