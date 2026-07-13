@@ -50,13 +50,29 @@ final class DoseCalculatorTests: XCTestCase {
     }
 
     func testChipAbbreviations() {
-        // Clinical shorthand beats generated abbreviations.
-        XCTAssertEqual(crChipAbbreviation(key: "rosc.bolus", title: "Fluid bolus"), "IVF")
-        // Short first words are said in full…
-        XCTAssertEqual(crChipAbbreviation(key: "med.blood", title: "Blood given"), "BLOOD")
-        // …long ones get three letters.
+        // Known clinical shorthand, keyed on the leading word.
+        XCTAssertEqual(crChipAbbreviation(key: "x", title: "Fluid bolus"), "IVF")
+        XCTAssertEqual(crChipAbbreviation(key: "x", title: "Blood given"), "BLOOD")
         XCTAssertEqual(crChipAbbreviation(key: "x", title: "Epinephrine"), "EPI")
-        XCTAssertEqual(crChipAbbreviation(key: "x", title: "Amiodarone"), "AMI")
+        XCTAssertEqual(crChipAbbreviation(key: "x", title: "Amiodarone"), "AMIO")
+        XCTAssertEqual(crChipAbbreviation(key: "x", title: "Calcium"), "CA")
+        XCTAssertEqual(crChipAbbreviation(key: "x", title: "Bicarb"), "BICARB")
+        // Unknown short word → said whole; unknown long word → first 3.
+        XCTAssertEqual(crChipAbbreviation(key: "x", title: "Zeta"), "ZETA")
+        XCTAssertEqual(crChipAbbreviation(key: "x", title: "Zetatropine"), "ZET")
+    }
+
+    func testMlPerKgDosing() {
+        // Fluids: 20 mL/kg × 12 kg = 240 mL, featured as mL, no mg tail.
+        let doses = DoseCalculator.doses(for: Defaults.fluids, weightKg: 12)
+        XCTAssertEqual(doses[0].volumeMl ?? 0, 120, accuracy: 0.01)   // 10 mL/kg
+        XCTAssertEqual(doses[1].volumeMl ?? 0, 240, accuracy: 0.01)   // 20 mL/kg
+        XCTAssertEqual(doses[1].volumeText, "240 mL")
+        XCTAssertEqual(doses[1].summary, "240 mL")                    // no "(… mg)"
+        // 20 mL/kg caps at 2000 mL for a large patient.
+        let big = DoseCalculator.doses(for: Defaults.fluids, weightKg: 150)
+        XCTAssertEqual(big[1].volumeMl ?? 0, 2000, accuracy: 0.01)
+        XCTAssertTrue(big[1].capped)
     }
 }
 
@@ -222,6 +238,19 @@ final class SessionEngineTests: XCTestCase {
         engine.startCPR(at: start.addingTimeInterval(45))
         XCTAssertEqual(engine.cycleRemaining(at: start.addingTimeInterval(65)), 100, accuracy: 0.01)
         XCTAssertTrue(engine.session.events.contains { $0.definitionID == "cpr.start" })
+    }
+
+    func testLoggedEventCarriesItemColor() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        engine.startCPR(at: start)
+        // A volume/support drug's timer must show BLUE, not the red med category.
+        engine.logDrug(Defaults.calcium, at: start.addingTimeInterval(30))
+        let ca = engine.session.events.last { $0.category == .medication }
+        XCTAssertEqual(ca?.tintHex, CRTheme.volumeHex)
+        let timer = engine.session.runningTimers(at: start.addingTimeInterval(60))
+            .first { $0.id == Defaults.calciumID.uuidString }
+        XCTAssertEqual(timer?.colorHex, CRTheme.volumeHex)
     }
 
     func testWeightChangeUpdatesDosesAndLogs() {

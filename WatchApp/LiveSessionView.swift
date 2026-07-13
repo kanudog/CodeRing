@@ -1,12 +1,15 @@
 // LiveSessionView.swift — the team lead's instrument.
-// Layout: elapsed header → nested rings (CPR cycle outer, EPI inner) →
-// hint line → three radial anchors along the bottom:
-//   SHOCK (left, amber)  — TAP logs the next energy step instantly;
-//                          HOLD blooms the explicit 2 J/kg / 4 J/kg arc.
-//   EVENTS (center, violet) — hold/tap bloom: pause-resume, rhythm, access
-//                          (nested sites, skippable), airway, ROSC, customs.
-//   MEDS (right, red)    — bloom of the drug set; release logs with the
-//                          computed dose snapshot (mL featured).
+// Layout: elapsed header → nested rings (CPR cycle outer, drug-interval
+// inner) → four radial buttons, color-coded by role:
+//   RHYTHM/CODE (red, bottom-left)   — epi, atropine, adenosine, amio, lido.
+//   EVENTS (violet, bottom-center)   — rhythm, access→site, airway, comms,
+//                                      temp, ROSC (nested, leaf-only logging).
+//   VOLUME/SUPPORT (blue, bottom-right) — fluids, dextrose, calcium, bicarb,
+//                                      magnesium, naloxone, blood, drip.
+//   SHOCK (amber, right of the ring) — tap = next defib energy; hold =
+//                                      Defib ladder / Cardiovert.
+// Every logged item freezes its own color, so its timer (gutter chip, inner
+// ring, timers sheet) reads in the same hue as its button.
 // TimelineView drives the clock; the engine holds anchor dates (no drift).
 
 import SwiftUI
@@ -198,13 +201,15 @@ struct LiveSessionView: View {
         }
     }
 
-    /// Since-last chips for given meds. Slots are assigned in FIRST-dose
-    /// order and never move: left gutter takes the first three, the right
-    /// gutter the next three — a repeat dose just resets its clock in place.
+    /// Since-given chips for meds / fluids / shocks, each in ITS OWN color
+    /// (red rhythm meds, blue volume, amber defib). Slots assigned in
+    /// first-given order and never move: left gutter first three, right
+    /// gutter next three — a repeat dose just resets its clock in place.
     private func medChipColumn(now: Date, side: Int) -> some View {
+        let chipCats: Set<EventCategory> = [.medication, .defibrillation, .volume]
         var firstSeen: [String] = []
         var latest: [String: CodeEvent] = [:]
-        for e in engine.session.events where e.category == .medication {
+        for e in engine.session.events where chipCats.contains(e.category) {
             guard let key = e.definitionID else { continue }
             if !firstSeen.contains(key) { firstSeen.append(key) }
             if let seen = latest[key], seen.date > e.date { continue }
@@ -217,13 +222,11 @@ struct LiveSessionView: View {
         return VStack(alignment: align, spacing: 5) {
             ForEach(slots, id: \.self) { key in
                 if let event = latest[key] {
-                    let drug = engine.drugSet.drugs.first { $0.id.uuidString == key }
-                    let tint = drug.map { Color(hex: $0.colorHex) } ?? CRTheme.med
                     VStack(alignment: align, spacing: 0) {
-                        Text(crChipAbbreviation(key: key, title: drug?.name ?? event.title))
+                        Text(crChipAbbreviation(key: key, title: event.title))
                             .font(.system(size: 7, weight: .heavy, design: .rounded))
                             .tracking(0.4)
-                            .foregroundStyle(tint)
+                            .foregroundStyle(Color(hex: event.tintHex))
                         Text(crClock(now.timeIntervalSince(event.date)))
                             .font(.system(size: 10, weight: .heavy, design: .rounded).monospacedDigit())
                             .foregroundStyle(CRTheme.text)
@@ -237,19 +240,29 @@ struct LiveSessionView: View {
 
     private func header(now: Date) -> some View {
         VStack(spacing: 1) {
-            HStack(spacing: 4) {
+            HStack(spacing: 3) {
                 headerButton("list.bullet", tint: CRTheme.textDim) { showLog = true }
                 headerButton("timer", tint: CRTheme.textDim) { showTimers = true }
+                // Manual pause/resume lives here now — the events bloom is the
+                // fixed clinical set (rhythm/access/airway/comms/temp/ROSC).
+                if engine.cprStarted, !engine.roscAchieved {
+                    headerButton(engine.isPaused ? "play.fill" : "pause.fill",
+                                 tint: engine.isPaused ? CRTheme.rosc : CRTheme.textDim) {
+                        engine.togglePause(); flashLast()
+                    }
+                }
 
                 Spacer(minLength: 2)
 
-                // Wall clock up top (documentation time), code clock labeled under it.
+                // Wall clock up top (documentation time), code clock labeled
+                // under it. fixedSize keeps both on one line now the pause
+                // button shares the top row.
                 VStack(spacing: 0) {
                     Text(Self.wallClock.string(from: now))
-                        .font(.system(size: 14, weight: .heavy, design: .rounded).monospacedDigit())
+                        .font(.system(size: 13, weight: .heavy, design: .rounded).monospacedDigit())
                         .foregroundStyle(CRTheme.text)
                     HStack(spacing: 3) {
-                        Text("TOTAL CODE")
+                        Text("TOTAL")
                             .font(.system(size: 8, weight: .heavy, design: .rounded))
                             .tracking(0.5)
                             .foregroundStyle(CRTheme.textDim)
@@ -257,9 +270,9 @@ struct LiveSessionView: View {
                             .font(.system(size: 10, weight: .heavy, design: .rounded).monospacedDigit())
                             .foregroundStyle(CRTheme.cpr)
                     }
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
                 }
+                .lineLimit(1)
+                .fixedSize()
 
                 Spacer(minLength: 2)
 
@@ -302,9 +315,9 @@ struct LiveSessionView: View {
                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 10, weight: .bold))
+                .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(tint)
-                .frame(width: 22, height: 22)
+                .frame(width: 19, height: 19)
                 .background(Circle().fill(CRTheme.surface))
         }
         .buttonStyle(.plain)
@@ -570,157 +583,218 @@ struct LiveSessionView: View {
     private func anchors(size: CGSize) -> some View {
         let y = size.height - 36   // high enough that labels never clip the bezel
         return ZStack {
-            RadialAnchor(id: "shock",
+            // Rhythm / Code — RED, bottom-left. Antiarrhythmics + code meds.
+            RadialAnchor(id: "code",
                          center: CGPoint(x: size.width * 0.16, y: y),
-                         symbol: "bolt.fill", label: "Shock", color: CRTheme.shock,
-                         items: shockItems,
-                         // wide arc + long radius: three options get the whole
-                         // upper-left quadrant instead of huddling together
-                         arcStart: -100, arcEnd: -20, radius: 72,
-                         tapAction: quickShock,
-                         model: menu, onSelect: selectShock)
+                         symbol: "waveform.path.ecg.rectangle", label: "Rhythm/Code",
+                         color: CRTheme.med,
+                         items: rhythmCodeItems,
+                         arcStart: -96, arcEnd: -4, radius: 74,
+                         model: menu, onSelect: select)
 
+            // Events — VIOLET, bottom-center.
             RadialAnchor(id: "events",
                          center: CGPoint(x: size.width * 0.5, y: y),
-                         symbol: "square.grid.2x2.fill", label: "Events", color: CRTheme.cpr,
+                         symbol: "square.grid.2x2.fill", label: "Events",
+                         color: CRTheme.cpr,
                          items: eventsItems,
                          arcStart: -168, arcEnd: -12, radius: 74,
-                         model: menu, onSelect: selectEvent)
+                         model: menu, onSelect: select)
 
-            RadialAnchor(id: "meds",
+            // Volume / Support — BLUE, bottom-right.
+            RadialAnchor(id: "support",
                          center: CGPoint(x: size.width * 0.84, y: y),
-                         symbol: "syringe.fill", label: "Meds", color: CRTheme.med,
-                         items: medItems,
-                         arcStart: -176, arcEnd: -82, radius: 84,
-                         model: menu, onSelect: selectMed)
+                         symbol: "drop.fill", label: "Volume/Support",
+                         color: CRTheme.volume,
+                         items: supportItems,
+                         arcStart: -90, arcEnd: -178, radius: 84,
+                         model: menu, onSelect: select)
+
+            // Shock — YELLOW, just right of the main ring (fully on-screen,
+            // not clipped at the bezel). Tap = next defib energy; hold =
+            // Defib ladder / Cardiovert, blooming left into open space.
+            if engine.cprStarted, !engine.roscAchieved {
+                RadialAnchor(id: "shock",
+                             center: CGPoint(x: size.width * 0.82, y: size.height * 0.34),
+                             symbol: "bolt.fill", label: "Shock",
+                             color: CRTheme.shock,
+                             items: shockItems,
+                             arcStart: -160, arcEnd: -230, radius: 60,
+                             tapAction: quickShock,
+                             model: menu, onSelect: select)
+            }
         }
     }
 
-    // MARK: - Item builders
+    // MARK: - Menu trees
+    // Leaf ids encode the action so ONE selector handles every menu:
+    //   drug:<uuid>[#step]  → log that drug (auto ladder or forced rung)
+    //   evt:<base>[|detail] → log a catalog event with an optional path
+    //   rosc / pause        → engine control
+    //   grp:*               → parent, never fires (only expands)
 
-    private var defib: DrugProfile? {
-        engine.drugSet.drugs.first { $0.unit == .joulesPerKg }
+    private func drug(_ id: UUID) -> DrugProfile? {
+        engine.drugSet.drugs.first { $0.id == id }
+    }
+    private var defib: DrugProfile? { drug(Defaults.defibID) }
+
+    private func drugItem(_ id: UUID) -> RadialItem? {
+        guard let d = drug(id) else { return nil }
+        return RadialItem(id: "drug:\(id.uuidString)", title: d.name,
+                          symbol: d.symbol, colorHex: d.colorHex)
     }
 
-    /// SHOCK bloom hierarchy per Sebastian: Defib (weight-based joule ladder
-    /// as children), then sync cardioversion and pacing as sibling leaves.
+    /// Rhythm/Code — 12 o'clock clockwise: epi, atropine, adenosine, amio, lido.
+    private func rhythmCodeItems() -> [RadialItem] {
+        [Defaults.epiID, Defaults.atropineID, Defaults.adenosineID,
+         Defaults.amioID, Defaults.lidocaineID].compactMap(drugItem)
+    }
+
+    /// Shock — Defib (weight-based joule ladder) + Cardiovert.
     private func shockItems() -> [RadialItem] {
         var items: [RadialItem] = []
         if let defib {
             let doses = DoseCalculator.doses(for: defib, weightKg: engine.session.patient.weightKg)
             let steps = doses.enumerated().map { i, d in
-                RadialItem(id: "shock.\(i)",
+                RadialItem(id: "drug:\(defib.id.uuidString)#\(i)",
                            title: "\(d.stepLabel) · \(d.amountText)",
-                           symbol: "bolt.fill",
-                           color: CRTheme.shock)
+                           symbol: "bolt.fill", colorHex: CRTheme.shockHex)
             }
-            items.append(RadialItem(id: "shock.defib", title: "Defib",
-                                    symbol: "bolt.fill", color: CRTheme.shock,
-                                    children: steps))
+            items.append(RadialItem(id: "grp:defib", title: "Defib", symbol: "bolt.fill",
+                                    colorHex: CRTheme.shockHex, children: steps))
         }
-        if let sync = engine.eventDefs.first(where: { $0.id == "shock.sync" }) {
-            items.append(item(for: sync))
-        }
-        if let pace = engine.eventDefs.first(where: { $0.id == "shock.pace" }) {
-            items.append(item(for: pace))
-        }
+        items.append(RadialItem(id: "evt:cardiovert", title: "Cardiovert",
+                                symbol: "bolt.heart.fill", colorHex: CRTheme.shockHex))
         return items
     }
 
-    private func medItems() -> [RadialItem] {
-        var items = engine.drugSet.drugs
-            .filter { $0.unit == .mgPerKg }
-            .map { d in
-                RadialItem(id: d.id.uuidString, title: d.name,
-                           symbol: d.symbol, color: Color(hex: d.colorHex))
-            }
-        if items.count > 5 {
-            let rest = Array(items.dropFirst(4))
-            items = Array(items.prefix(4))
-            items.append(RadialItem(id: "more.meds", title: "More",
-                                    symbol: "ellipsis", color: CRTheme.textDim,
-                                    children: rest))
-        }
-        return items
-    }
-
-    private func item(for def: EventDefinition) -> RadialItem {
-        let children: [RadialItem]? = def.subOptions.isEmpty ? nil :
-            def.subOptions.map {
-                RadialItem(id: "\(def.id)|\($0)", title: $0,
-                           symbol: def.symbol, color: def.category.color)
-            }
-        return RadialItem(id: def.id, title: def.title, symbol: def.symbol,
-                          color: def.category.color, children: children)
-    }
-
-    /// In ROSC the bloom swaps to the post-resuscitation care set
-    /// ("rosc."-prefixed built-ins) plus rhythm checks and customs.
-    private func roscEventsItems() -> [RadialItem] {
-        var items: [RadialItem] = []
-        if let rc = engine.eventDefs.first(where: { $0.id == "rhythm.check" }) {
-            items.append(item(for: rc))
-        }
-        items.append(contentsOf: engine.eventDefs
-            .filter { $0.id.hasPrefix("rosc.") }
-            .map(item(for:)))
-        // Blood and temperature management stay reachable after ROSC too.
-        for id in ["med.blood", "temp.mgmt"] {
-            if let def = engine.eventDefs.first(where: { $0.id == id }) {
-                items.append(item(for: def))
+    /// Volume/Support — 12 o'clock counter-clockwise: fluids, dextrose,
+    /// calcium, bicarb, more.
+    private func supportItems() -> [RadialItem] {
+        let blue = CRTheme.volumeHex
+        var fluidKids: [RadialItem] = [
+            RadialItem(id: "evt:blood", title: "Blood",
+                       symbol: "drop.circle.fill", colorHex: blue)
+        ]
+        if let f = drug(Defaults.fluidsID) {
+            for (i, d) in DoseCalculator.doses(for: f, weightKg: engine.session.patient.weightKg).enumerated() {
+                fluidKids.append(RadialItem(id: "drug:\(f.id.uuidString)#\(i)",
+                                            title: d.stepLabel, symbol: "drop.fill", colorHex: blue))
             }
         }
-        items.append(contentsOf: engine.eventDefs
-            .filter { $0.category == .custom }
-            .map(item(for:)))
-        if items.count > 6 {
-            let rest = Array(items.dropFirst(5))
-            items = Array(items.prefix(5))
-            items.append(RadialItem(id: "more.events", title: "More",
-                                    symbol: "ellipsis", color: CRTheme.textDim,
-                                    children: rest))
-        }
-        return items
-    }
-
-    private func eventsItems() -> [RadialItem] {
-        if engine.roscAchieved { return roscEventsItems() }
+        var more: [RadialItem] = [
+            RadialItem(id: "evt:drip", title: "Drip", symbol: "arrow.down.right.circle.fill", colorHex: blue)
+        ]
+        more.append(contentsOf: [Defaults.magnesiumID, Defaults.naloxoneID].compactMap(drugItem))
 
         var items: [RadialItem] = [
-            RadialItem(id: "cpr.toggle",
-                       title: engine.isPaused ? "Resume CPR" : "Pause CPR",
-                       symbol: engine.isPaused ? "play.fill" : "pause.fill",
-                       color: CRTheme.cpr)
+            RadialItem(id: "grp:fluids", title: "Fluids", symbol: "drop.fill",
+                       colorHex: blue, children: fluidKids)
         ]
-
-        // Every def renders itself — subOptions (access limbs, temp devices)
-        // become the child arc automatically.
-        for id in engine.protocolDef.eventIDs {
-            guard let def = engine.eventDefs.first(where: { $0.id == id }) else { continue }
-            items.append(item(for: def))
-        }
-
-        let customs = engine.eventDefs.filter { $0.category == .custom }
-        items.append(contentsOf: customs.map(item(for:)))
-
-        if items.count > 6 {
-            let rest = Array(items.dropFirst(5))
-            items = Array(items.prefix(5))
-            items.append(RadialItem(id: "more.events", title: "More",
-                                    symbol: "ellipsis", color: CRTheme.textDim,
-                                    children: rest))
-        }
+        items.append(contentsOf: [Defaults.dextroseID, Defaults.calciumID, Defaults.bicarbID].compactMap(drugItem))
+        items.append(RadialItem(id: "grp:more", title: "More", symbol: "ellipsis",
+                                colorHex: blue, children: more))
         return items
     }
 
-    // MARK: - Selection handlers
+    private let limbNames = ["L arm", "L leg", "R arm", "R leg"]
+    private let commsServices = ["Surgery", "Anesthesia", "ECMO", "Consult"]
 
-    private func selectMed(_ item: RadialItem) {
-        if item.id == "more.meds" { return }
-        guard let drug = engine.drugSet.drugs.first(where: { $0.id.uuidString == item.id })
-        else { return }
-        engine.logDrug(drug)
-        flashLast()
+    private func tempParent() -> RadialItem {
+        let teal = CRTheme.careHex
+        let devices = ["Bair Hugger", "Arctic Sun", "Warm blankets"]
+        let syms = ["wind", "snowflake", "square.stack.3d.up.fill"]
+        let kids = zip(devices, syms).map { name, sym in
+            RadialItem(id: "evt:temp|\(name)", title: name, symbol: sym, colorHex: teal)
+        }
+        return RadialItem(id: "grp:temp", title: "Temp", symbol: "thermometer.medium",
+                          colorHex: teal, children: kids)
+    }
+
+    /// Events — left to right: Rhythm, Access, Airway, Comms, Temp, ROSC.
+    private func eventsItems() -> [RadialItem] {
+        if engine.roscAchieved { return roscEventsItems() }
+        let access = CRTheme.accessHex, airway = CRTheme.airwayHex, comms = CRTheme.commsHex
+        var items: [RadialItem] = []
+
+        items.append(RadialItem(id: "evt:rhythm", title: "Rhythm",
+                                symbol: "waveform.path.ecg", colorHex: CRTheme.rhythmHex))
+
+        // Access → IV / IO → limb (two levels deep)
+        func limbs(_ base: String) -> [RadialItem] {
+            limbNames.map { RadialItem(id: "evt:\(base)|\($0)", title: $0,
+                                       symbol: "smallcircle.filled.circle", colorHex: access) }
+        }
+        items.append(RadialItem(id: "grp:access", title: "Access",
+                                symbol: "cross.circle.fill", colorHex: access, children: [
+            RadialItem(id: "grp:iv", title: "IV", symbol: "cross.vial.fill", colorHex: access, children: limbs("access.iv")),
+            RadialItem(id: "grp:io", title: "IO", symbol: "target", colorHex: access, children: limbs("access.io"))
+        ]))
+
+        // Airway → intubation / bag / mask / trach
+        items.append(RadialItem(id: "grp:airway", title: "Airway",
+                                symbol: "lungs.fill", colorHex: airway, children: [
+            RadialItem(id: "evt:airway.ett", title: "Intubation", symbol: "lungs.fill", colorHex: airway),
+            RadialItem(id: "evt:airway.bag", title: "Bag", symbol: "aqi.medium", colorHex: airway),
+            RadialItem(id: "evt:airway.mask", title: "Mask", symbol: "facemask.fill", colorHex: airway),
+            RadialItem(id: "evt:airway.trach", title: "Trach", symbol: "stethoscope", colorHex: airway)
+        ]))
+
+        // Comms → Call / Arrival → service (two levels deep)
+        func services(_ base: String, _ sym: String) -> [RadialItem] {
+            commsServices.map { RadialItem(id: "evt:\(base)|\($0)", title: $0, symbol: sym, colorHex: comms) }
+        }
+        items.append(RadialItem(id: "grp:comms", title: "Comms",
+                                symbol: "person.2.wave.2.fill", colorHex: comms, children: [
+            RadialItem(id: "grp:call", title: "Call", symbol: "phone.fill", colorHex: comms, children: services("comms.call", "phone.fill")),
+            RadialItem(id: "grp:arrival", title: "Arrival", symbol: "figure.walk.arrival", colorHex: comms, children: services("comms.arrival", "figure.walk"))
+        ]))
+
+        items.append(tempParent())
+        items.append(RadialItem(id: "rosc", title: "ROSC", symbol: "heart.fill", colorHex: CRTheme.roscHex))
+
+        // Custom events (phone-built) ride along at the end.
+        items.append(contentsOf: engine.eventDefs.filter { $0.category == .custom }.map {
+            RadialItem(id: "evt:\($0.id)", title: $0.title, symbol: $0.symbol, colorHex: $0.category.colorHex)
+        })
+        return items
+    }
+
+    /// Post-ROSC bloom: reassessment-oriented set.
+    private func roscEventsItems() -> [RadialItem] {
+        let blue = CRTheme.volumeHex
+        return [
+            RadialItem(id: "evt:rhythm", title: "Rhythm", symbol: "waveform.path.ecg", colorHex: CRTheme.rhythmHex),
+            RadialItem(id: "evt:12lead", title: "12-lead", symbol: "waveform.path.ecg.rectangle", colorHex: CRTheme.rhythmHex),
+            RadialItem(id: "evt:drip", title: "Drip", symbol: "arrow.down.right.circle.fill", colorHex: blue),
+            RadialItem(id: "evt:blood", title: "Blood", symbol: "drop.circle.fill", colorHex: blue),
+            tempParent()
+        ]
+    }
+
+    // MARK: - Catalog + unified selection
+
+    private struct EvtMeta { let title: String; let category: EventCategory; let colorHex: String }
+
+    /// Maps an event base id → what to log. Detail (limb, service, device)
+    /// rides in the leaf id after "|".
+    private var eventCatalog: [String: EvtMeta] {
+        [
+            "rhythm":         .init(title: "Rhythm check", category: .rhythm, colorHex: CRTheme.rhythmHex),
+            "12lead":         .init(title: "12-lead ECG", category: .rhythm, colorHex: CRTheme.rhythmHex),
+            "access.iv":      .init(title: "IV access", category: .access, colorHex: CRTheme.accessHex),
+            "access.io":      .init(title: "IO access", category: .access, colorHex: CRTheme.accessHex),
+            "airway.ett":     .init(title: "Intubation", category: .airway, colorHex: CRTheme.airwayHex),
+            "airway.bag":     .init(title: "Bag-mask", category: .airway, colorHex: CRTheme.airwayHex),
+            "airway.mask":    .init(title: "Mask", category: .airway, colorHex: CRTheme.airwayHex),
+            "airway.trach":   .init(title: "Trach", category: .airway, colorHex: CRTheme.airwayHex),
+            "comms.call":     .init(title: "Call", category: .comms, colorHex: CRTheme.commsHex),
+            "comms.arrival":  .init(title: "Arrival", category: .comms, colorHex: CRTheme.commsHex),
+            "temp":           .init(title: "Temp mgmt", category: .care, colorHex: CRTheme.careHex),
+            "blood":          .init(title: "Blood given", category: .volume, colorHex: CRTheme.volumeHex),
+            "drip":           .init(title: "Drip started", category: .volume, colorHex: CRTheme.volumeHex),
+            "cardiovert":     .init(title: "Cardioversion", category: .defibrillation, colorHex: CRTheme.shockHex)
+        ]
     }
 
     private func quickShock() {
@@ -730,43 +804,37 @@ struct LiveSessionView: View {
         flashLast()
     }
 
-    private func selectShock(_ item: RadialItem) {
-        // Sync cardioversion / pacing are event leaves, not defib doses.
-        if item.id == "shock.sync" || item.id == "shock.pace" {
-            guard let def = engine.eventDefs.first(where: { $0.id == item.id }) else { return }
-            engine.logEvent(def)
-            flashLast()
-            return
-        }
-        guard let defib,
-              let stepIndex = Int(item.id.split(separator: ".").last.map(String.init) ?? "")
-        else { return }
-        engine.logDrug(defib, forcedStepIndex: stepIndex)
-        flashLast()
-    }
+    /// The one handler every anchor uses.
+    private func select(_ item: RadialItem) {
+        let id = item.id
+        if id == "pause" { engine.togglePause(); flashLast(); return }
+        if id == "rosc" { engine.markROSC(); flashLast(); return }
 
-    private func selectEvent(_ item: RadialItem) {
-        if item.id == "more.events" { return }
+        if id.hasPrefix("drug:") {
+            let body = id.dropFirst(5)
+            let parts = body.split(separator: "#", maxSplits: 1)
+            guard let uuid = UUID(uuidString: String(parts[0])), let d = drug(uuid) else { return }
+            let step = parts.count > 1 ? Int(parts[1]) : nil
+            engine.logDrug(d, forcedStepIndex: step)
+            flashLast()
+            return
+        }
 
-        if item.id == "cpr.toggle" {
-            engine.togglePause()
+        if id.hasPrefix("evt:") {
+            let segs = id.dropFirst(4).split(separator: "|", maxSplits: 1).map(String.init)
+            let base = segs[0]
+            let detail = segs.count > 1 ? segs[1] : nil
+            if let meta = eventCatalog[base] {
+                engine.logEvent(title: meta.title, detail: detail, category: meta.category,
+                                definitionID: base, colorHex: meta.colorHex)
+            } else if let def = engine.eventDefs.first(where: { $0.id == base }) {
+                engine.logEvent(title: def.title, detail: detail, category: def.category,
+                                definitionID: def.id, colorHex: def.category.colorHex)
+            }
             flashLast()
             return
         }
-        // Parents ("access.group", "more.*") never fire anymore — the menu
-        // only selects leaves — so no generic-access fallback exists.
-        if item.id.contains("|") {
-            let parts = item.id.split(separator: "|", maxSplits: 1).map(String.init)
-            guard parts.count == 2,
-                  let def = engine.eventDefs.first(where: { $0.id == parts[0] })
-            else { return }
-            engine.logEvent(def, subOption: parts[1])
-            flashLast()
-            return
-        }
-        guard let def = engine.eventDefs.first(where: { $0.id == item.id }) else { return }
-        engine.logEvent(def)
-        flashLast()
+        // grp:* parents only expand — nothing to fire.
     }
 
     // MARK: - Helpers

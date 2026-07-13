@@ -21,8 +21,16 @@ struct RadialItem: Identifiable, Equatable {
     let id: String
     let title: String
     let symbol: String
-    let color: Color
+    let colorHex: String
     var children: [RadialItem]? = nil
+
+    var color: Color { Color(hex: colorHex) }
+
+    init(id: String, title: String, symbol: String, colorHex: String,
+         children: [RadialItem]? = nil) {
+        self.id = id; self.title = title; self.symbol = symbol
+        self.colorHex = colorHex; self.children = children
+    }
 
     static func == (a: RadialItem, b: RadialItem) -> Bool { a.id == b.id }
 }

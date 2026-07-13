@@ -25,6 +25,86 @@ final class WatchDriverTests: XCTestCase {
         XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10), "weight page not shown")
     }
 
+    /// Focused: open the Shock-by-ring bloom FIRST so the sim's always-on
+    /// hasn't dimmed, and hold it open for the external capture.
+    func testV6_shock() throws {
+        ring.terminate(); sleep(1); ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START'")).firstMatch.tap()
+        ring.buttons["Cardiac Arrest"].tap()
+        XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10))
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 8)); go.tap()
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch.tap()
+        XCTAssertTrue(ring.buttons.matching(NSPredicate(format: "label BEGINSWITH 'NEXT PULSE CHECK'")).firstMatch.waitForExistence(timeout: 8))
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        // Shock anchor at (0.9w, 0.40h); bloom opens up-left. Hold 4s so the
+        // external burst (0.25 s) catches Defib/Cardiovert before dimming.
+        at(f.width * 0.82, f.height * 0.45)
+            .press(forDuration: 0.5, thenDragTo: at(f.width * 0.82 - 44, f.height * 0.45 - 24),
+                   withVelocity: .slow, thenHoldForDuration: 4.0)
+        ring.terminate()
+    }
+
+    /// v6 tour: full-bleed home → the four color-coded menus (Rhythm/Code,
+    /// Events w/ deep nesting, Volume/Support, Shock-by-ring) → colored chips.
+    func testV6_menus() throws {
+        ring.terminate(); sleep(1); ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        sleep(2)   // shot: home
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START'")).firstMatch.tap()
+        ring.buttons["Cardiac Arrest"].tap()
+        XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10))
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 8)); go.tap()
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch.tap()
+        let pc = ring.buttons.matching(NSPredicate(format: "label BEGINSWITH 'NEXT PULSE CHECK'")).firstMatch
+        XCTAssertTrue(pc.waitForExistence(timeout: 8))
+        sleep(2)   // shot: live w/ shock button by the ring
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        let ay = f.height - 36
+
+        // 1 — Rhythm/Code (left): hold to bloom the 5 red meds, drag onto Epi
+        // (index 0, arc -96°, r 74 → offset (-7.7, -73.6)) and release.
+        let cx = f.width * 0.16
+        at(cx, ay).press(forDuration: 0.5, thenDragTo: at(cx - 8, ay - 74),
+                         withVelocity: .slow, thenHoldForDuration: 1.2)
+        sleep(2)   // shot: EPI chip (red) on the left gutter
+
+        // 2 — Volume/Support (right): hold to bloom, dwell 2.2s on Fluids
+        // (index 0, arc -90°, r 84 → straight up, offset (0, -84)) to expand
+        // Blood/10/20, then release on 20 mL/kg.
+        let sx = f.width * 0.84
+        at(sx, ay).press(forDuration: 0.5, thenDragTo: at(sx, ay - 84),
+                         withVelocity: .slow, thenHoldForDuration: 3.4)
+        sleep(2)   // shot: fluids expanded
+
+        // 3 — Events (center): hold, dwell on Access (index 1 of 6, arc
+        // -168+31.2= -136.8°, r 74 → offset (-54.1, -50.5)) to expand IV/IO.
+        let ex = f.width * 0.5
+        at(ex, ay).press(forDuration: 0.5, thenDragTo: at(ex - 54, ay - 50),
+                         withVelocity: .slow, thenHoldForDuration: 3.4)
+        sleep(2)   // shot: access → IV/IO
+
+        // 4 — Shock (right of ring): hold to bloom Defib/Cardiovert.
+        let shx = f.width * 0.9, shy = f.height * 0.40
+        at(shx, shy).press(forDuration: 0.5, thenDragTo: at(shx - 40, shy - 20),
+                           withVelocity: .slow, thenHoldForDuration: 2.5)
+        sleep(2)   // shot: shock bloom
+
+        ring.terminate()
+    }
+
     /// v5 feedback tour: spaced home trio → IVF/BLOOD chips via tap-mode
     /// More submenu → uniform caps radial labels → compact timers sheet.
     func testV5_feedback() throws {

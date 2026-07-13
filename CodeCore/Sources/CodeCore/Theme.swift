@@ -35,7 +35,9 @@ public enum CRTheme {
     public static let cprHex = "A78BFA"          // CPR cycle — violet
     public static let roscHex = "4ADE80"         // outcome — bright green
     public static let rhythmHex = "60A5FA"       // rhythm checks — blue
-    public static let careHex = "2DD4BF"         // supportive care (temp, fluids) — teal
+    public static let careHex = "2DD4BF"         // supportive care (temp) — teal
+    public static let volumeHex = "3B82F6"       // volume/support meds & fluids — blue
+    public static let commsHex = "818CF8"        // team comms — indigo
     public static let customHex = "F0ABFC"       // user-defined — pink
     public static let demoHex = "FFB020"         // demo badge — amber
 
@@ -53,6 +55,8 @@ public enum CRTheme {
     public static var rosc: Color { Color(hex: roscHex) }
     public static var rhythm: Color { Color(hex: rhythmHex) }
     public static var care: Color { Color(hex: careHex) }
+    public static var volume: Color { Color(hex: volumeHex) }
+    public static var comms: Color { Color(hex: commsHex) }
     public static var custom: Color { Color(hex: customHex) }
     public static var demo: Color { Color(hex: demoHex) }
 }
@@ -69,13 +73,20 @@ public func crOffset(_ seconds: Int) -> String {
     return String(format: "+%d:%02d", t / 60, t % 60)
 }
 
-/// Gutter-chip abbreviation for a logged med: clinical shorthand where one
-/// exists, the whole first word when it's short enough to just say it
+/// Gutter-chip abbreviation for a logged item: known clinical shorthand
+/// first, then the whole first word when short enough to just say it
 /// ("BLOOD"), otherwise the first three letters ("EPI").
 public func crChipAbbreviation(key: String, title: String) -> String {
-    let shorthand: [String: String] = ["rosc.bolus": "IVF"]
-    if let s = shorthand[key] { return s }
     let firstWord = title.split(separator: " ").first.map(String.init) ?? title
+    // Keyed on the leading word (lowercased) so it works for drugs and events.
+    let known: [String: String] = [
+        "epinephrine": "EPI", "atropine": "ATRO", "adenosine": "ADEN",
+        "amiodarone": "AMIO", "lidocaine": "LIDO", "dextrose": "D25",
+        "calcium": "CA", "sodium": "BICARB", "bicarb": "BICARB",
+        "magnesium": "MAG", "naloxone": "NAL", "fluid": "IVF", "fluids": "IVF",
+        "blood": "BLOOD", "defibrillation": "DEFIB", "cardioversion": "CVERT"
+    ]
+    if let s = known[firstWord.lowercased()] { return s }
     return (firstWord.count <= 5 ? firstWord : String(firstWord.prefix(3))).uppercased()
 }
 

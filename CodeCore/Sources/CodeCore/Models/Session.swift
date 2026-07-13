@@ -91,7 +91,7 @@ public extension CodeSession {
         }
         let rows = latest.map { key, event in
             RunningTimer(id: key, title: event.title, since: event.date,
-                         colorHex: event.category.colorHex)
+                         colorHex: event.tintHex)   // the item's own hue
         }
         let total = RunningTimer(id: "total", title: "Total code",
                                  since: startDate, colorHex: CRTheme.cprHex)

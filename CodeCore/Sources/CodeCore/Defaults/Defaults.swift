@@ -18,6 +18,14 @@ public enum Defaults {
     public static let atropineID = UUID(uuidString: "C0DE0000-0000-4000-8000-0000000000A3")!
     public static let adenosineID = UUID(uuidString: "C0DE0000-0000-4000-8000-0000000000A4")!
     public static let defibID   = UUID(uuidString: "C0DE0000-0000-4000-8000-0000000000A5")!
+    // Added 2026-07-13 — never regenerate (watch↔phone identity).
+    public static let lidocaineID = UUID(uuidString: "C0DE0000-0000-4000-8000-0000000000A6")!
+    public static let fluidsID  = UUID(uuidString: "C0DE0000-0000-4000-8000-0000000000A7")!
+    public static let dextroseID = UUID(uuidString: "C0DE0000-0000-4000-8000-0000000000A8")!
+    public static let calciumID = UUID(uuidString: "C0DE0000-0000-4000-8000-0000000000A9")!
+    public static let bicarbID  = UUID(uuidString: "C0DE0000-0000-4000-8000-0000000000AA")!
+    public static let magnesiumID = UUID(uuidString: "C0DE0000-0000-4000-8000-0000000000AB")!
+    public static let naloxoneID = UUID(uuidString: "C0DE0000-0000-4000-8000-0000000000AC")!
     public static let examplitolID = UUID(uuidString: "C0DE0000-0000-4000-8000-0000000000AF")!
 
     // MARK: - Drugs (key meds only — rare items get added later via the editor)
@@ -35,6 +43,8 @@ public enum Defaults {
                     notes: "Repeat q3–5 min. Demo values.")
     }
 
+    // Rhythm/Code meds all wear the group's RED so their timers read as one
+    // family (distinguished by the chip abbreviation, not hue).
     public static var amiodarone: DrugProfile {
         DrugProfile(id: amioID,
                     name: "Amiodarone",
@@ -42,9 +52,9 @@ public enum Defaults {
                     unit: .mgPerKg,
                     steps: [DoseStep(label: "Bolus", perKg: 5.0, maxAbsolute: 300)],
                     concentrationMgPerMl: 50,
-                    colorHex: "F472B6",
+                    colorHex: CRTheme.medHex,
                     symbol: "cross.vial.fill",
-                    notes: "VF/pVT. May repeat ×2. Demo values.")
+                    notes: "VF/pVT. 5 mg/kg, may repeat ×2 (max 15 mg/kg/day). Demo values.")
     }
 
     public static var atropine: DrugProfile {
@@ -54,9 +64,9 @@ public enum Defaults {
                     unit: .mgPerKg,
                     steps: [DoseStep(label: "IV/IO", perKg: 0.02, maxAbsolute: 0.5)],
                     concentrationMgPerMl: 0.1,
-                    colorHex: "FB923C",
+                    colorHex: CRTheme.medHex,
                     symbol: "heart.circle.fill",
-                    notes: "Bradycardia w/ increased vagal tone. Demo values.")
+                    notes: "Bradycardia (vagal / AV block). 0.02 mg/kg, may repeat once. Demo values.")
     }
 
     public static var adenosine: DrugProfile {
@@ -69,9 +79,21 @@ public enum Defaults {
                         DoseStep(label: "2nd", perKg: 0.2, maxAbsolute: 12)
                     ],
                     concentrationMgPerMl: 3,
-                    colorHex: "38BDF8",
+                    colorHex: CRTheme.medHex,
                     symbol: "bolt.heart.fill",
-                    notes: "SVT. Rapid flush. Demo values.")
+                    notes: "SVT. 0.1 then 0.2 mg/kg, rapid flush. Demo values.")
+    }
+
+    public static var lidocaine: DrugProfile {
+        DrugProfile(id: lidocaineID,
+                    name: "Lidocaine",
+                    subtitle: "20 mg/mL (2%)",
+                    unit: .mgPerKg,
+                    steps: [DoseStep(label: "Bolus", perKg: 1.0, maxAbsolute: 100)],
+                    concentrationMgPerMl: 20,
+                    colorHex: CRTheme.medHex,
+                    symbol: "waveform.path.ecg",
+                    notes: "VF/pVT alternative to amiodarone. 1 mg/kg. Demo values.")
     }
 
     public static var defibrillation: DrugProfile {
@@ -87,6 +109,82 @@ public enum Defaults {
                     colorHex: CRTheme.shockHex,
                     symbol: "bolt.fill",
                     notes: "2 J/kg, then 4 J/kg, up to 10 J/kg. Demo values.")
+    }
+
+    // MARK: - Volume / Support meds (blue group)
+
+    /// Volume-dosed: 10 or 20 mL/kg isotonic bolus (Blood lives beside these
+    /// as an event). mL is the number that matters.
+    public static var fluids: DrugProfile {
+        DrugProfile(id: fluidsID,
+                    name: "Fluid bolus",
+                    subtitle: "Isotonic crystalloid",
+                    unit: .mlPerKg,
+                    steps: [
+                        DoseStep(label: "10 mL/kg", perKg: 10),
+                        DoseStep(label: "20 mL/kg", perKg: 20, maxAbsolute: 2000)
+                    ],
+                    colorHex: CRTheme.volumeHex,
+                    symbol: "drop.fill",
+                    notes: "10–20 mL/kg; reassess after each. Demo values.")
+    }
+
+    public static var dextrose: DrugProfile {
+        DrugProfile(id: dextroseID,
+                    name: "Dextrose",
+                    subtitle: "D25 (250 mg/mL)",
+                    unit: .mlPerKg,
+                    steps: [DoseStep(label: "D25", perKg: 2, maxAbsolute: 100)],
+                    colorHex: CRTheme.volumeHex,
+                    symbol: "cube.fill",
+                    notes: "Hypoglycemia: 0.5 g/kg = 2 mL/kg of D25. Demo values.")
+    }
+
+    public static var calcium: DrugProfile {
+        DrugProfile(id: calciumID,
+                    name: "Calcium",
+                    subtitle: "CaCl₂ 100 mg/mL",
+                    unit: .mgPerKg,
+                    steps: [DoseStep(label: "CaCl₂", perKg: 20, maxAbsolute: 1000)],
+                    concentrationMgPerMl: 100,
+                    colorHex: CRTheme.volumeHex,
+                    symbol: "circle.hexagongrid.fill",
+                    notes: "20 mg/kg calcium chloride (hyperK, hypoCa, CCB). Demo values.")
+    }
+
+    public static var bicarb: DrugProfile {
+        DrugProfile(id: bicarbID,
+                    name: "Bicarb",
+                    subtitle: "8.4% (1 mEq/mL)",
+                    unit: .mlPerKg,
+                    steps: [DoseStep(label: "1 mEq/kg", perKg: 1, maxAbsolute: 50)],
+                    colorHex: CRTheme.volumeHex,
+                    symbol: "seal.fill",
+                    notes: "1 mEq/kg = 1 mL/kg of 8.4%. Demo values.")
+    }
+
+    public static var magnesium: DrugProfile {
+        DrugProfile(id: magnesiumID,
+                    name: "Magnesium",
+                    subtitle: "500 mg/mL",
+                    unit: .mgPerKg,
+                    steps: [DoseStep(label: "Sulfate", perKg: 50, maxAbsolute: 2000)],
+                    concentrationMgPerMl: 500,
+                    colorHex: CRTheme.volumeHex,
+                    symbol: "bolt.horizontal.fill",
+                    notes: "Torsades / hypoMg: 25–50 mg/kg (max 2 g). Demo values.")
+    }
+
+    public static var naloxone: DrugProfile {
+        DrugProfile(id: naloxoneID,
+                    name: "Naloxone",
+                    subtitle: "0.4 mg/mL",
+                    unit: .mgPerKg,
+                    steps: [DoseStep(label: "IV/IO", perKg: 0.1, maxAbsolute: 2)],
+                    concentrationMgPerMl: 0.4,
+                    colorHex: CRTheme.volumeHex,
+                    symbol: "nose.fill",
+                    notes: "Opioid reversal: 0.1 mg/kg (max 2 mg). Demo values.")
     }
 
     /// Fictional sample drug — exists purely to preview the card style & editor.
@@ -105,8 +203,14 @@ public enum Defaults {
     public static var palsDrugSet: DrugProfileSet {
         DrugProfileSet(id: palsSetID,
                        name: "PALS Default (Demo)",
-                       drugs: [epinephrine, defibrillation, amiodarone,
-                               atropine, adenosine, examplitol],
+                       drugs: [
+                           // Rhythm/Code (red)
+                           epinephrine, atropine, adenosine, amiodarone, lidocaine,
+                           // Shock (yellow)
+                           defibrillation,
+                           // Volume/Support (blue)
+                           fluids, dextrose, calcium, bicarb, magnesium, naloxone
+                       ],
                        isBuiltIn: true)
     }
 

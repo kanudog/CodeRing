@@ -10,17 +10,20 @@ import Foundation
 public enum DoseUnit: String, Codable, Sendable {
     case mgPerKg
     case joulesPerKg
+    case mlPerKg        // volume-dosed (fluids, bicarb, dextrose) — mL IS the number
 
     public var amountSuffix: String {
         switch self {
         case .mgPerKg: return "mg"
         case .joulesPerKg: return "J"
+        case .mlPerKg: return "mL"
         }
     }
     public var perKgSuffix: String {
         switch self {
         case .mgPerKg: return "mg/kg"
         case .joulesPerKg: return "J/kg"
+        case .mlPerKg: return "mL/kg"
         }
     }
 }
@@ -96,6 +99,8 @@ public struct DoseResult: Sendable, Equatable {
     }
     /// One-line summary for event details / reports.
     public var summary: String {
+        // mL-dosed drugs ARE their volume — no redundant "(12 mL)" tail.
+        if unit == .mlPerKg { return "\(volumeText ?? amountText)\(capped ? " · capped" : "")" }
         if let v = volumeText { return "\(v)  (\(amountText))\(capped ? " · capped" : "")" }
         return "\(amountText)\(capped ? " · capped" : "")"
     }
@@ -113,6 +118,8 @@ public enum DoseCalculator {
             var ml: Double? = nil
             if drug.unit == .mgPerKg, let conc = drug.concentrationMgPerMl, conc > 0 {
                 ml = roundedVolume(amount / conc)
+            } else if drug.unit == .mlPerKg {
+                ml = amount   // the dose already IS the volume
             }
             return DoseResult(stepLabel: step.label, amount: amount, volumeMl: ml,
                               unit: drug.unit, capped: capped)
@@ -138,6 +145,8 @@ public enum DoseCalculator {
             if value < 1 { return (value * 100).rounded() / 100 }
             if value < 10 { return (value * 10).rounded() / 10 }
             return value.rounded()
+        case .mlPerKg:
+            return roundedVolume(value)   // 0.1 mL resolution
         }
     }
 

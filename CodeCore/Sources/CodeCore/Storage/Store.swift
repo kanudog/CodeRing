@@ -225,8 +225,17 @@ public final class CodeStore {
     }
 
     private func load() {
-        drugSets = read([DrugProfileSet].self, from: "drugSets.json") ?? [Defaults.palsDrugSet]
-        if drugSets.isEmpty { drugSets = [Defaults.palsDrugSet] }
+        var sets = read([DrugProfileSet].self, from: "drugSets.json") ?? []
+        // Built-in sets are read-only ship templates (users customize via
+        // copies). Refresh them from the CURRENT defaults on every load, so a
+        // new default roster reaches existing installs instead of being
+        // shadowed by the stale copy cached on disk.
+        if let i = sets.firstIndex(where: { $0.id == Defaults.palsSetID }) {
+            sets[i] = Defaults.palsDrugSet
+        } else {
+            sets.insert(Defaults.palsDrugSet, at: 0)
+        }
+        drugSets = sets
         customEvents = read([EventDefinition].self, from: "customEvents.json") ?? []
         sessions = read([CodeSession].self, from: "sessions.json") ?? []
         settings = read(AppSettings.self, from: "settings.json") ?? AppSettings()

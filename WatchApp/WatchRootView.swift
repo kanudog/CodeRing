@@ -53,14 +53,19 @@ struct HomeView: View {
     private let store = CodeStore.shared
 
     var body: some View {
-        ScrollView {
+        ZStack {
+            // Full-bleed backdrop — without this the navy stops at the safe
+            // area and the rounded display shows black bars down the sides.
+            CRTheme.bg.ignoresSafeArea()
+
+            ScrollView {
             VStack(spacing: 6) {
                 // Bullseye cluster: START CODE front and center, Recent and
                 // Settings tucked under its lower corners (drawn first, so
                 // the big button overlaps them slightly).
                 ZStack {
                     // ±42 keeps the labels clear of the display's corner
-                    // curve; y 46 gives the big button real breathing room.
+                    // curve; y 50 gives the big button real breathing room.
                     orbitButton(symbol: "clock.arrow.circlepath", title: "Recent") {
                         WatchSessionsList()
                     }
@@ -97,9 +102,10 @@ struct HomeView: View {
                 DemoBadge()
                     .padding(.top, 6)
             }
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 4)
+            }
         }
-        .background(CRTheme.bg)
         .navigationTitle("CodeRing")
     }
 

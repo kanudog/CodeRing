@@ -159,7 +159,7 @@ public final class SessionEngine {
         }
         let category: EventCategory = drug.unit == .joulesPerKg ? .defibrillation : .medication
         append(title: drug.name, detail: detail, category: category,
-               definitionID: drug.id.uuidString, at: now)
+               definitionID: drug.id.uuidString, colorHex: drug.colorHex, at: now)
 
         if drug.resetsInterval {
             for spec in protocolDef.intervalSpecs where spec.linkedDrugID == drug.id {
@@ -172,7 +172,17 @@ public final class SessionEngine {
     public func logEvent(_ def: EventDefinition, subOption: String? = nil, at now: Date = Date()) {
         if def.id == "outcome.rosc" { markROSC(at: now); return }
         append(title: def.title, detail: subOption, category: def.category,
-               definitionID: def.id, at: now)
+               definitionID: def.id, colorHex: def.category.colorHex, at: now)
+    }
+
+    /// Logs an ad-hoc event straight from a menu leaf — the watch builds its
+    /// deep menus in-view, so it passes title/category/color directly rather
+    /// than round-tripping an EventDefinition.
+    public func logEvent(title: String, detail: String?, category: EventCategory,
+                         definitionID: String?, colorHex: String? = nil,
+                         at now: Date = Date()) {
+        append(title: title, detail: detail, category: category,
+               definitionID: definitionID, colorHex: colorHex, at: now)
     }
 
     public func logNote(_ text: String, at now: Date = Date()) {
@@ -314,10 +324,10 @@ public final class SessionEngine {
     }
 
     private func append(title: String, detail: String?, category: EventCategory,
-                        definitionID: String?, at now: Date) {
+                        definitionID: String?, colorHex: String? = nil, at now: Date) {
         let offset = Int(elapsed(at: now))
         session.events.append(CodeEvent(date: now, offsetSeconds: offset, title: title,
                                         detail: detail, category: category,
-                                        definitionID: definitionID))
+                                        definitionID: definitionID, colorHex: colorHex))
     }
 }

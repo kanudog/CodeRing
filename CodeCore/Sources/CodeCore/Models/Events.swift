@@ -8,7 +8,7 @@ import Foundation
 import SwiftUI
 
 public enum EventCategory: String, Codable, CaseIterable, Sendable {
-    case medication, defibrillation, rhythm, airway, access, cpr, outcome, care, custom
+    case medication, defibrillation, rhythm, airway, access, cpr, outcome, care, volume, comms, custom
 
     public var colorHex: String {
         switch self {
@@ -20,6 +20,8 @@ public enum EventCategory: String, Codable, CaseIterable, Sendable {
         case .cpr: return CRTheme.cprHex
         case .outcome: return CRTheme.roscHex
         case .care: return CRTheme.careHex
+        case .volume: return CRTheme.volumeHex
+        case .comms: return CRTheme.commsHex
         case .custom: return CRTheme.customHex
         }
     }
@@ -35,6 +37,8 @@ public enum EventCategory: String, Codable, CaseIterable, Sendable {
         case .cpr: return "CPR"
         case .outcome: return "Outcome"
         case .care: return "Care"
+        case .volume: return "Volume/Support"
+        case .comms: return "Comms"
         case .custom: return "Custom"
         }
     }
@@ -63,13 +67,22 @@ public struct CodeEvent: Identifiable, Codable, Sendable, Equatable {
     public var detail: String?         // dose summary, site, energy, free text
     public var category: EventCategory
     public var definitionID: String?   // links back to EventDefinition / drug UUID string
+    /// The item's theme color, frozen at log time, so every timer surface
+    /// (gutter chip, inner ring, timers list) shows the same hue as the
+    /// button it came from. Optional → old sessions decode with nil and fall
+    /// back to the category color.
+    public var colorHex: String?
 
     public init(id: UUID = UUID(), date: Date, offsetSeconds: Int, title: String,
-                detail: String? = nil, category: EventCategory, definitionID: String? = nil) {
+                detail: String? = nil, category: EventCategory, definitionID: String? = nil,
+                colorHex: String? = nil) {
         self.id = id; self.date = date; self.offsetSeconds = offsetSeconds
         self.title = title; self.detail = detail; self.category = category
-        self.definitionID = definitionID
+        self.definitionID = definitionID; self.colorHex = colorHex
     }
+
+    /// Theme color for this event — its stored hue, else its category's.
+    public var tintHex: String { colorHex ?? category.colorHex }
 
     public var stamp: String { crOffset(offsetSeconds) }
 }
