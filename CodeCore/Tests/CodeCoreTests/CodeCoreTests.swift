@@ -91,6 +91,111 @@ final class WeightEstimatorTests: XCTestCase {
     }
 }
 
+final class RadialLayoutTests: XCTestCase {
+
+    private let bounds = CGSize(width: 198, height: 191)   // 45 mm live screen
+
+    private func assertOnScreen(_ layout: RadialLayout, count: Int,
+                                file: StaticString = #filePath, line: UInt = #line) {
+        for i in 0..<count {
+            let p = layout.position(forIndex: i, count: count)
+            XCTAssertGreaterThanOrEqual(p.x, 19, "bubble \(i) off left", file: file, line: line)
+            XCTAssertLessThanOrEqual(p.x, bounds.width - 19, "bubble \(i) off right", file: file, line: line)
+            XCTAssertGreaterThanOrEqual(p.y, 13, "bubble \(i) off top", file: file, line: line)
+            XCTAssertLessThanOrEqual(p.y, bounds.height - 15, "bubble \(i) off bottom", file: file, line: line)
+        }
+    }
+
+    private func minPairDistance(_ layout: RadialLayout, count: Int) -> CGFloat {
+        var best = CGFloat.infinity
+        for i in 0..<count {
+            for j in (i + 1)..<count {
+                let a = layout.position(forIndex: i, count: count)
+                let b = layout.position(forIndex: j, count: count)
+                best = min(best, hypot(a.x - b.x, a.y - b.y))
+            }
+        }
+        return best
+    }
+
+    /// Walk the deepest real path: events root (6) → Access (2) → IV (4
+    /// limbs), each level re-centered on the tapped item like the watch does.
+    func testCascadeAccessIVLimbsStaysOnScreenAndSpaced() {
+        var root = RadialLayout(anchor: CGPoint(x: 99, y: 155), bounds: bounds)
+        root.fit(count: 6, preferredCenter: nil, startRadius: 76)
+        assertOnScreen(root, count: 6)
+        XCTAssertGreaterThanOrEqual(minPairDistance(root, count: 6), 40)
+
+        let access = root.position(forIndex: 1, count: 6)
+        let travel1 = atan2(Double(access.y - root.anchor.y),
+                            Double(access.x - root.anchor.x)) * 180 / .pi
+        var lvl1 = RadialLayout(anchor: access, bounds: bounds)
+        lvl1.fit(count: 2, preferredCenter: travel1, startRadius: 58)
+        assertOnScreen(lvl1, count: 2)
+        XCTAssertGreaterThanOrEqual(minPairDistance(lvl1, count: 2), 40)
+        // Children stay reachable from the finger: no fan flies across the screen.
+        for i in 0..<2 {
+            let p = lvl1.position(forIndex: i, count: 2)
+            XCTAssertLessThanOrEqual(hypot(p.x - access.x, p.y - access.y), 130)
+        }
+
+        let iv = lvl1.position(forIndex: 0, count: 2)
+        let travel2 = atan2(Double(iv.y - access.y), Double(iv.x - access.x)) * 180 / .pi
+        var lvl2 = RadialLayout(anchor: iv, bounds: bounds)
+        lvl2.fit(count: 4, preferredCenter: travel2, startRadius: 58)
+        assertOnScreen(lvl2, count: 4)
+        XCTAssertGreaterThanOrEqual(minPairDistance(lvl2, count: 4), 34)
+    }
+
+    /// Every parent in the ACTUAL four menu trees must lay out its children
+    /// on screen, at every depth, exactly as the watch cascades them.
+    func testEveryParentExpandsOnScreen() {
+        // node = (childCount, grandchild counts per child); mirrors the trees.
+        struct Node { let children: Int; let grand: [Int] }
+        // (anchor, root count, parents by root index)
+        let menus: [(CGPoint, Int, [Int: Node])] = [
+            (CGPoint(x: 29.7, y: 145), 5, [:]),                      // rhythm/code: all leaves
+            (CGPoint(x: 99, y: 155), 6, [                            // events
+                1: Node(children: 2, grand: [4, 4]),                 // access → IV/IO → limbs
+                2: Node(children: 4, grand: []),                     // airway
+                3: Node(children: 2, grand: [4, 4]),                 // comms → call/arrival → services
+                4: Node(children: 3, grand: [])                      // temp devices
+            ]),
+            (CGPoint(x: 168.3, y: 145), 5, [                         // volume (reversed order)
+                0: Node(children: 3, grand: []),                     // more
+                4: Node(children: 3, grand: [])                      // fluids
+            ]),
+            (CGPoint(x: 175, y: 45.8), 2, [                          // shock
+                0: Node(children: 3, grand: [])                      // defib rungs
+            ])
+        ]
+        for (anchor, count, parents) in menus {
+            var root = RadialLayout(anchor: anchor, bounds: bounds)
+            root.fit(count: count, preferredCenter: nil, startRadius: 74)
+            assertOnScreen(root, count: count)
+            for (idx, node) in parents {
+                let parent = root.position(forIndex: idx, count: count)
+                let travel = atan2(Double(parent.y - anchor.y),
+                                   Double(parent.x - anchor.x)) * 180 / .pi
+                var lvl1 = RadialLayout(anchor: parent, bounds: bounds)
+                lvl1.fit(count: node.children, preferredCenter: travel, startRadius: 58)
+                assertOnScreen(lvl1, count: node.children)
+                XCTAssertGreaterThanOrEqual(minPairDistance(lvl1, count: node.children), 30,
+                    "children of \(anchor) idx \(idx) crowded")
+                for (ci, gcount) in node.grand.enumerated() where gcount > 0 {
+                    let cpos = lvl1.position(forIndex: ci, count: node.children)
+                    let t2 = atan2(Double(cpos.y - parent.y), Double(cpos.x - parent.x)) * 180 / .pi
+                    var lvl2 = RadialLayout(anchor: cpos, bounds: bounds)
+                    lvl2.fit(count: gcount, preferredCenter: t2, startRadius: 58)
+                    assertOnScreen(lvl2, count: gcount)
+                    XCTAssertGreaterThanOrEqual(minPairDistance(lvl2, count: gcount), 30,
+                        "grandchildren of \(anchor) idx \(idx).\(ci) crowded")
+                }
+            }
+        }
+    }
+}
+
 @MainActor
 final class SessionEngineTests: XCTestCase {
 

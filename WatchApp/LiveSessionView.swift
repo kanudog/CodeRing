@@ -243,13 +243,19 @@ struct LiveSessionView: View {
             HStack(spacing: 3) {
                 headerButton("list.bullet", tint: CRTheme.textDim) { showLog = true }
                 headerButton("timer", tint: CRTheme.textDim) { showTimers = true }
-                // Manual pause/resume lives here now — the events bloom is the
-                // fixed clinical set (rhythm/access/airway/comms/temp/ROSC).
+                // Manual pause/resume lives here now — filled violet so it
+                // reads as a primary control, green while paused (= resume).
                 if engine.cprStarted, !engine.roscAchieved {
-                    headerButton(engine.isPaused ? "play.fill" : "pause.fill",
-                                 tint: engine.isPaused ? CRTheme.rosc : CRTheme.textDim) {
+                    Button {
                         engine.togglePause(); flashLast()
+                    } label: {
+                        Image(systemName: engine.isPaused ? "play.fill" : "pause.fill")
+                            .font(.system(size: 9, weight: .black))
+                            .foregroundStyle(CRTheme.bg)
+                            .frame(width: 19, height: 19)
+                            .background(Circle().fill(engine.isPaused ? CRTheme.rosc : CRTheme.cpr))
                     }
+                    .buttonStyle(.plain)
                 }
 
                 Spacer(minLength: 2)
@@ -367,9 +373,13 @@ struct LiveSessionView: View {
                 WatchHaptics.play(.notification)
             } label: {
                 VStack(spacing: 0) {
+                    // Two short lines so the label never crosses the rings.
                     Text("NEXT PULSE CHECK")
                         .font(.system(size: 8, weight: .heavy, design: .rounded))
                         .tracking(0.5)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .frame(width: 64)
                         .foregroundStyle(checkOverdue ? CRTheme.med : CRTheme.cpr)
                     Text(crClockSigned(cycleRem))
                         .font(.system(size: 25, weight: .heavy, design: .rounded).monospacedDigit())
