@@ -61,11 +61,15 @@ final class ToneMetronome {
     private var soundOn = false
     private var frequency: Double = MetronomePitch.medium.frequency
 
+    /// AUDIO-ONLY by design (Sebastian: a wrist that buzzes on every beat
+    /// can't be ignored — cue haptics stay, the metronome never vibrates).
+    /// With sound off there is nothing to do, so the timer doesn't run.
     func start(bpm: Int, soundOn: Bool, pitch: MetronomePitch = .medium) {
         stop()
         self.soundOn = soundOn
         self.frequency = pitch.frequency
-        if soundOn { startAudio() }
+        guard soundOn else { return }
+        startAudio()
         let interval = 60.0 / Double(max(60, min(160, bpm)))
         let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             self?.tick()
@@ -86,8 +90,7 @@ final class ToneMetronome {
     }
 
     private func tick() {
-        WatchHaptics.play(.click)
-        if soundOn { envelope = 1.0 }
+        envelope = 1.0   // audio tick only — never a haptic
     }
 
     private func startAudio() {

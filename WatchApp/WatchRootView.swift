@@ -248,7 +248,7 @@ struct WatchSettingsView: View {
                         Text(p.label).tag(p)
                     }
                 }
-                Text("\(store.settings.metronomeBPM) bpm · haptic click every beat")
+                Text("\(store.settings.metronomeBPM) bpm · audio only, no vibration")
                     .font(.system(size: 10, design: .rounded))
                     .foregroundStyle(CRTheme.textDim)
             }
