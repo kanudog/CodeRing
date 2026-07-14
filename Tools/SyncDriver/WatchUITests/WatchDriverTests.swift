@@ -25,6 +25,77 @@ final class WatchDriverTests: XCTestCase {
         XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10), "weight page not shown")
     }
 
+    /// v9: chips in every phase + dose badges + icon audit. Logs epi BEFORE
+    /// Start CPR (chip must appear on the gate screen), then five distinct
+    /// meds to fill the left column (4) and spill bottom-right, with ×2 on epi.
+    func testV9_chips() throws {
+        ring.terminate(); sleep(1); ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START'")).firstMatch.tap()
+        ring.buttons["Cardiac Arrest"].tap()
+        XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10))
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 8)); go.tap()
+
+        let startCPR = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch
+        XCTAssertTrue(startCPR.waitForExistence(timeout: 8))
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        let sideY = f.height - 46
+        let cx = f.width * 0.15
+        // Rhythm/Code root fan (r 108): epi −94.2°, then +25.1° per index.
+        let epiT = at(cx - 8, sideY - 108)
+        let atroT = at(cx + 38.5, sideY - 101)
+        let adenT = at(cx + 78, sideY - 75)
+        let amioT = at(cx + 102, sideY - 35)
+        let lidoT = at(cx + 107, sideY + 12)
+
+        // 1 — Epi BEFORE Start CPR: chip must appear on the gate screen.
+        at(cx, sideY).press(forDuration: 0.5, thenDragTo: epiT,
+                            withVelocity: .slow, thenHoldForDuration: 0.6)
+        XCTAssertTrue(ring.staticTexts["EPI"].waitForExistence(timeout: 6),
+                      "pre-CPR chip missing")
+        XCTAssertTrue(startCPR.exists, "should still be on the gate screen")
+        sleep(3)   // shot: chip on gate screen
+
+        startCPR.tap()
+        sleep(1)
+
+        // 2 — Epi again (×2) + four more distinct meds.
+        for target in [epiT, atroT, adenT, amioT, lidoT] {
+            at(cx, sideY).press(forDuration: 0.5, thenDragTo: target,
+                                withVelocity: .slow, thenHoldForDuration: 0.6)
+            usleep(400_000)
+        }
+        XCTAssertTrue(ring.staticTexts["×2"].waitForExistence(timeout: 6),
+                      "epi ×2 badge missing")
+        for chip in ["EPI", "ATRO", "ADEN", "AMIO", "LIDO"] {
+            XCTAssertTrue(ring.staticTexts[chip].exists, "\(chip) chip missing")
+        }
+        sleep(3)   // shot: 4 left chips + 1 bottom-right, clear of SHOCK
+
+        // 3 — Volume fan: Ca / HCO₃ text icons + blood red drop (level 2).
+        let vx = f.width * 0.85
+        at(vx, sideY).press(forDuration: 0.5, thenDragTo: at(vx, sideY - 60),
+                            withVelocity: .slow, thenHoldForDuration: 5.0)
+        sleep(1)
+
+        // End & sync.
+        let topButtons = ring.buttons.allElementsBoundByIndex.filter {
+            $0.frame.minY >= 0 && $0.frame.midY < 60 && $0.isHittable
+        }
+        topButtons.max(by: { $0.frame.maxX < $1.frame.maxX })?.tap()
+        let end = ring.buttons["End & review"]
+        XCTAssertTrue(end.waitForExistence(timeout: 10))
+        end.tap()
+        sleep(4)
+    }
+
     /// v8: cascading fans. Expand each parent (1 s haptic-ramp dwell) and
     /// release on nothing — the record must show ONLY the deliberate epi,
     /// proving expansion never logs. Bursts catch each child fan.

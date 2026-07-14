@@ -54,7 +54,7 @@ struct EventsAdminView: View {
 
     private func eventRow(_ event: EventDefinition) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: event.symbol)
+            CRIconView(symbol: event.symbol, size: 17)
                 .foregroundStyle(event.category.color)
                 .frame(width: 26)
             VStack(alignment: .leading, spacing: 1) {

@@ -132,18 +132,26 @@ struct LiveSessionView: View {
         return VStack(spacing: 2) {
             header(now: now)
 
-            if engine.roscAchieved {
-                roscBlock(now: now)
-            } else if !engine.cprStarted {
-                startCPRBlock
-            } else {
-                ringStack(cycleRem: cycleRem, cycleLen: cycleLen, idx: idx,
-                          epiRem: epiRem, epiLen: epiLen, epiRunning: epiRunning,
-                          epiOverdue: epiOverdue, epiSpec: epiSpec)
-                    .frame(maxWidth: .infinity)
-                    // Meds fill the LEFT gutter first, spill RIGHT after three.
-                    .overlay(alignment: .leading) { medChipColumn(now: now, side: 0) }
-                    .overlay(alignment: .trailing) { medChipColumn(now: now, side: 1) }
+            // Chips ride EVERY phase — a med given before Start CPR (or
+            // after ROSC) keeps its timer visible the moment it's logged.
+            Group {
+                if engine.roscAchieved {
+                    roscBlock(now: now)
+                } else if !engine.cprStarted {
+                    startCPRBlock
+                } else {
+                    ringStack(cycleRem: cycleRem, cycleLen: cycleLen, idx: idx,
+                              epiRem: epiRem, epiLen: epiLen, epiRunning: epiRunning,
+                              epiOverdue: epiOverdue, epiSpec: epiSpec)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            // Left gutter takes the first four; the next three sit BOTTOM-
+            // right, in the band between the shock button above and the
+            // volume anchor below (bottom padding keeps clocks clear of it).
+            .overlay(alignment: .leading) { medChipColumn(now: now, side: 0) }
+            .overlay(alignment: .bottomTrailing) {
+                medChipColumn(now: now, side: 1).padding(.bottom, 16)
             }
 
             Spacer(minLength: 48)   // anchor zone
@@ -202,38 +210,50 @@ struct LiveSessionView: View {
     }
 
     /// Since-given chips for meds / fluids / shocks, each in ITS OWN color
-    /// (red rhythm meds, blue volume, amber defib). Slots assigned in
-    /// first-given order and never move: left gutter first three, right
-    /// gutter next three — a repeat dose just resets its clock in place.
+    /// (red rhythm meds, blue volume, red blood, amber defib) with a ×N dose
+    /// count pill between the name and the clock. Slots are assigned in
+    /// first-given order and never move: the left gutter takes four, the
+    /// next three sit BOTTOM-right — below the shock button, never under it.
+    /// A repeat dose bumps its count and resets its clock in place.
     private func medChipColumn(now: Date, side: Int) -> some View {
         let chipCats: Set<EventCategory> = [.medication, .defibrillation, .volume]
         var firstSeen: [String] = []
         var latest: [String: CodeEvent] = [:]
+        var counts: [String: Int] = [:]
         for e in engine.session.events where chipCats.contains(e.category) {
             guard let key = e.definitionID else { continue }
             if !firstSeen.contains(key) { firstSeen.append(key) }
+            counts[key, default: 0] += 1
             if let seen = latest[key], seen.date > e.date { continue }
             latest[key] = e
         }
-        let slots = side == 0 ? Array(firstSeen.prefix(3))
-                              : Array(firstSeen.dropFirst(3).prefix(3))
-        let align: HorizontalAlignment = side == 0 ? .leading : .trailing
+        let slots = side == 0 ? Array(firstSeen.prefix(4))
+                              : Array(firstSeen.dropFirst(4).prefix(3))
+        let align: Alignment = side == 0 ? .leading : .trailing
 
-        return VStack(alignment: align, spacing: 5) {
+        return VStack(spacing: 4) {
             ForEach(slots, id: \.self) { key in
                 if let event = latest[key] {
-                    VStack(alignment: align, spacing: 0) {
+                    VStack(spacing: 1) {
                         Text(crChipAbbreviation(key: key, title: event.title))
                             .font(.system(size: 7, weight: .heavy, design: .rounded))
                             .tracking(0.4)
                             .foregroundStyle(Color(hex: event.tintHex))
+                        Text("×\(counts[key] ?? 1)")
+                            .font(.system(size: 6.5, weight: .heavy, design: .rounded).monospacedDigit())
+                            .foregroundStyle(CRTheme.text)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 0.5)
+                            .background(RoundedRectangle(cornerRadius: 4).fill(CRTheme.surfaceHi))
                         Text(crClock(now.timeIntervalSince(event.date)))
-                            .font(.system(size: 10, weight: .heavy, design: .rounded).monospacedDigit())
+                            .font(.system(size: 9.5, weight: .heavy, design: .rounded).monospacedDigit())
                             .foregroundStyle(CRTheme.text)
                     }
+                    .frame(maxWidth: .infinity, alignment: align)
                 }
             }
         }
+        .frame(width: 44)
         .padding(.horizontal, 1)
     }
 
@@ -600,7 +620,7 @@ struct LiveSessionView: View {
             // Rhythm / Code — RED, bottom-left. Antiarrhythmics + code meds.
             RadialAnchor(id: "code",
                          center: CGPoint(x: size.width * 0.15, y: sideY),
-                         symbol: "waveform.path.ecg.rectangle", label: "Rhythm/Code",
+                         symbol: "syringe.fill", label: "Rhythm/Code",
                          color: CRTheme.med,
                          items: rhythmCodeItems,
                          radius: 84, bounds: size,
@@ -689,7 +709,8 @@ struct LiveSessionView: View {
         let blue = CRTheme.volumeHex
         var fluidKids: [RadialItem] = [
             RadialItem(id: "evt:blood", title: "Blood",
-                       symbol: "drop.circle.fill", colorHex: blue)
+                       symbol: "drop.fill", colorHex: blue,
+                       iconColorHex: CRTheme.medHex)
         ]
         if let f = drug(Defaults.fluidsID) {
             for (i, d) in DoseCalculator.doses(for: f, weightKg: engine.session.patient.weightKg).enumerated() {
@@ -698,7 +719,7 @@ struct LiveSessionView: View {
             }
         }
         var more: [RadialItem] = [
-            RadialItem(id: "evt:drip", title: "Drip", symbol: "arrow.down.right.circle.fill", colorHex: blue)
+            RadialItem(id: "evt:drip", title: "Drip", symbol: "ivfluid.bag", colorHex: blue)
         ]
         more.append(contentsOf: [Defaults.magnesiumID, Defaults.naloxoneID].compactMap(drugItem))
 
@@ -750,9 +771,9 @@ struct LiveSessionView: View {
         items.append(RadialItem(id: "grp:airway", title: "Airway",
                                 symbol: "lungs.fill", colorHex: airway, children: [
             RadialItem(id: "evt:airway.ett", title: "Intubation", symbol: "lungs.fill", colorHex: airway),
-            RadialItem(id: "evt:airway.bag", title: "Bag", symbol: "aqi.medium", colorHex: airway),
+            RadialItem(id: "evt:airway.bag", title: "Bag", symbol: "text:BVM", colorHex: airway),
             RadialItem(id: "evt:airway.mask", title: "Mask", symbol: "facemask.fill", colorHex: airway),
-            RadialItem(id: "evt:airway.trach", title: "Trach", symbol: "stethoscope", colorHex: airway)
+            RadialItem(id: "evt:airway.trach", title: "Trach", symbol: "text:TRACH", colorHex: airway)
         ]))
 
         // Comms → Call / Arrival → service (two levels deep)
@@ -781,8 +802,9 @@ struct LiveSessionView: View {
         return [
             RadialItem(id: "evt:rhythm", title: "Rhythm", symbol: "waveform.path.ecg", colorHex: CRTheme.rhythmHex),
             RadialItem(id: "evt:12lead", title: "12-lead", symbol: "waveform.path.ecg.rectangle", colorHex: CRTheme.rhythmHex),
-            RadialItem(id: "evt:drip", title: "Drip", symbol: "arrow.down.right.circle.fill", colorHex: blue),
-            RadialItem(id: "evt:blood", title: "Blood", symbol: "drop.circle.fill", colorHex: blue),
+            RadialItem(id: "evt:drip", title: "Drip", symbol: "ivfluid.bag", colorHex: blue),
+            RadialItem(id: "evt:blood", title: "Blood", symbol: "drop.fill", colorHex: blue,
+                       iconColorHex: CRTheme.medHex),
             tempParent()
         ]
     }
@@ -806,7 +828,7 @@ struct LiveSessionView: View {
             "comms.call":     .init(title: "Call", category: .comms, colorHex: CRTheme.commsHex),
             "comms.arrival":  .init(title: "Arrival", category: .comms, colorHex: CRTheme.commsHex),
             "temp":           .init(title: "Temp mgmt", category: .care, colorHex: CRTheme.careHex),
-            "blood":          .init(title: "Blood given", category: .volume, colorHex: CRTheme.volumeHex),
+            "blood":          .init(title: "Blood given", category: .volume, colorHex: CRTheme.medHex),
             "drip":           .init(title: "Drip started", category: .volume, colorHex: CRTheme.volumeHex),
             "cardiovert":     .init(title: "Cardioversion", category: .defibrillation, colorHex: CRTheme.shockHex)
         ]

@@ -65,7 +65,7 @@ public enum Defaults {
                     steps: [DoseStep(label: "IV/IO", perKg: 0.02, maxAbsolute: 0.5)],
                     concentrationMgPerMl: 0.1,
                     colorHex: CRTheme.medHex,
-                    symbol: "heart.circle.fill",
+                    symbol: "hare.fill",
                     notes: "Bradycardia (vagal / AV block). 0.02 mg/kg, may repeat once. Demo values.")
     }
 
@@ -80,7 +80,7 @@ public enum Defaults {
                     ],
                     concentrationMgPerMl: 3,
                     colorHex: CRTheme.medHex,
-                    symbol: "bolt.heart.fill",
+                    symbol: "pause.circle.fill",
                     notes: "SVT. 0.1 then 0.2 mg/kg, rapid flush. Demo values.")
     }
 
@@ -148,7 +148,7 @@ public enum Defaults {
                     steps: [DoseStep(label: "CaCl₂", perKg: 20, maxAbsolute: 1000)],
                     concentrationMgPerMl: 100,
                     colorHex: CRTheme.volumeHex,
-                    symbol: "circle.hexagongrid.fill",
+                    symbol: "text:Ca",
                     notes: "20 mg/kg calcium chloride (hyperK, hypoCa, CCB). Demo values.")
     }
 
@@ -159,7 +159,7 @@ public enum Defaults {
                     unit: .mlPerKg,
                     steps: [DoseStep(label: "1 mEq/kg", perKg: 1, maxAbsolute: 50)],
                     colorHex: CRTheme.volumeHex,
-                    symbol: "seal.fill",
+                    symbol: "text:HCO₃",
                     notes: "1 mEq/kg = 1 mL/kg of 8.4%. Demo values.")
     }
 
@@ -171,7 +171,7 @@ public enum Defaults {
                     steps: [DoseStep(label: "Sulfate", perKg: 50, maxAbsolute: 2000)],
                     concentrationMgPerMl: 500,
                     colorHex: CRTheme.volumeHex,
-                    symbol: "bolt.horizontal.fill",
+                    symbol: "text:Mg",
                     notes: "Torsades / hypoMg: 25–50 mg/kg (max 2 g). Demo values.")
     }
 

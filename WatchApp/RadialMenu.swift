@@ -22,16 +22,21 @@ import CodeCore
 struct RadialItem: Identifiable, Equatable {
     let id: String
     let title: String
+    /// SF Symbol name, or "text:XX" to render the string itself as the icon
+    /// (element abbreviations like Ca / Mg / HCO₃).
     let symbol: String
     let colorHex: String
+    /// Overrides the ICON's color only (e.g. blood: blue bubble, red drop).
+    var iconColorHex: String? = nil
     var children: [RadialItem]? = nil
 
     var color: Color { Color(hex: colorHex) }
 
     init(id: String, title: String, symbol: String, colorHex: String,
-         children: [RadialItem]? = nil) {
+         iconColorHex: String? = nil, children: [RadialItem]? = nil) {
         self.id = id; self.title = title; self.symbol = symbol
-        self.colorHex = colorHex; self.children = children
+        self.colorHex = colorHex; self.iconColorHex = iconColorHex
+        self.children = children
     }
 
     static func == (a: RadialItem, b: RadialItem) -> Bool { a.id == b.id }
@@ -216,11 +221,9 @@ final class RadialMenuModel {
         dwellTask = nil
         guard let idx = items.firstIndex(of: parent) else { return }
         let parentPos = layout.position(forIndex: idx, count: items.count)
-        // Fan direction: keep traveling AWAY from the previous center (the
-        // "slightly up and radially displaced" feel); the fit clamps it on
-        // screen when the finger is near an edge.
-        let travel = atan2(Double(parentPos.y - layout.anchor.y),
-                           Double(parentPos.x - layout.anchor.x)) * 180 / .pi
+        // Fan toward the roomiest part of the screen, one finger-reach out —
+        // children never pile into an edge or under other elements.
+        let open = RadialLayout.openSpaceDirection(from: parentPos, bounds: layout.bounds)
 
         stack.append(Level(items: items, backPos: backPos, breadcrumb: breadcrumb,
                            layout: layout))
@@ -229,7 +232,10 @@ final class RadialMenuModel {
         items = children
         hoveredID = nil
         layout.anchor = parentPos
-        layout.fit(count: children.count, preferredCenter: travel, startRadius: 58)
+        // Uniform standard: children sit ~56 pt (a finger-width) from the
+        // touch point; the cap keeps them within easy reach even squeezed.
+        layout.fit(count: children.count, preferredCenter: open,
+                   startRadius: 56, radiusCap: 72)
         WatchHaptics.play(.success)        // the "pop" that ends the dwell ramp
     }
 
@@ -392,16 +398,16 @@ struct RadialMenuOverlay: View {
                     let hovered = model.hoveredID == item.id
                     let p = model.labelPosition(forIndex: i, count: model.items.count)
                     Text(item.title.uppercased())
-                        .font(.system(size: 7, weight: .heavy, design: .rounded))
+                        .font(.system(size: 8.5, weight: .heavy, design: .rounded))
                         .tracking(0.3)
                         .foregroundStyle(hovered ? item.color : CRTheme.text)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
-                        .frame(maxWidth: 62)
+                        .frame(maxWidth: 70)
                         .padding(.horizontal, 3)
                         .padding(.vertical, 1)
                         .background(RoundedRectangle(cornerRadius: 5).fill(CRTheme.bg.opacity(0.72)))
-                        .position(x: min(max(p.x, 30), size.width - 30),
+                        .position(x: min(max(p.x, 32), size.width - 32),
                                   y: max(10, p.y))
                         .allowsHitTesting(false)
                 }
@@ -501,15 +507,30 @@ struct RadialMenuOverlay: View {
     @ViewBuilder
     private func bubble(_ item: RadialItem) -> some View {
         let hovered = model.hoveredID == item.id
+        // Icon color: explicit override wins (blood's red drop stays red on
+        // the hover fill too); otherwise item color, inverting on hover.
+        let iconColor = item.iconColorHex.map { Color(hex: $0) }
+            ?? (hovered ? CRTheme.bg : item.color)
         let core = ZStack {
             Circle()
                 .fill(hovered ? item.color : CRTheme.surfaceHi)
             Circle()
                 .strokeBorder(item.color.opacity(hovered ? 1 : 0.7),
                               lineWidth: hovered ? 2 : 1.2)
-            Image(systemName: item.symbol)
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(hovered ? CRTheme.bg : item.color)
+            if item.symbol.hasPrefix("text:") {
+                // Element abbreviations (Ca, Mg, HCO₃) render as type — same
+                // weight family as the SF icons so they read as siblings.
+                Text(item.symbol.dropFirst(5))
+                    .font(.system(size: 12, weight: .heavy, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .frame(width: 30)
+                    .foregroundStyle(iconColor)
+            } else {
+                Image(systemName: item.symbol)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(iconColor)
+            }
             if item.children != nil {
                 Circle()
                     .fill(item.color)

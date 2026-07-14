@@ -270,7 +270,7 @@ struct DrugEditorView: View {
     private var previewCard: some View {
         VStack(spacing: 6) {
             HStack {
-                Image(systemName: drug?.symbol ?? "syringe")
+                CRIconView(symbol: drug?.symbol ?? "syringe", size: 17)
                     .foregroundStyle(Color(hex: drug?.colorHex ?? CRTheme.medHex))
                 Text(drug?.name ?? "")
                     .font(.headline)

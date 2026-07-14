@@ -127,22 +127,23 @@ final class RadialLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(minPairDistance(root, count: 6), 40)
 
         let access = root.position(forIndex: 1, count: 6)
-        let travel1 = atan2(Double(access.y - root.anchor.y),
-                            Double(access.x - root.anchor.x)) * 180 / .pi
         var lvl1 = RadialLayout(anchor: access, bounds: bounds)
-        lvl1.fit(count: 2, preferredCenter: travel1, startRadius: 58)
+        lvl1.fit(count: 2,
+                 preferredCenter: RadialLayout.openSpaceDirection(from: access, bounds: bounds),
+                 startRadius: 56, radiusCap: 72)
         assertOnScreen(lvl1, count: 2)
         XCTAssertGreaterThanOrEqual(minPairDistance(lvl1, count: 2), 40)
-        // Children stay reachable from the finger: no fan flies across the screen.
+        // Uniform finger reach: children never fly across the screen.
         for i in 0..<2 {
             let p = lvl1.position(forIndex: i, count: 2)
-            XCTAssertLessThanOrEqual(hypot(p.x - access.x, p.y - access.y), 130)
+            XCTAssertLessThanOrEqual(hypot(p.x - access.x, p.y - access.y), 76)
         }
 
         let iv = lvl1.position(forIndex: 0, count: 2)
-        let travel2 = atan2(Double(iv.y - access.y), Double(iv.x - access.x)) * 180 / .pi
         var lvl2 = RadialLayout(anchor: iv, bounds: bounds)
-        lvl2.fit(count: 4, preferredCenter: travel2, startRadius: 58)
+        lvl2.fit(count: 4,
+                 preferredCenter: RadialLayout.openSpaceDirection(from: iv, bounds: bounds),
+                 startRadius: 56, radiusCap: 72)
         assertOnScreen(lvl2, count: 4)
         XCTAssertGreaterThanOrEqual(minPairDistance(lvl2, count: 4), 34)
     }
@@ -175,18 +176,19 @@ final class RadialLayoutTests: XCTestCase {
             assertOnScreen(root, count: count)
             for (idx, node) in parents {
                 let parent = root.position(forIndex: idx, count: count)
-                let travel = atan2(Double(parent.y - anchor.y),
-                                   Double(parent.x - anchor.x)) * 180 / .pi
                 var lvl1 = RadialLayout(anchor: parent, bounds: bounds)
-                lvl1.fit(count: node.children, preferredCenter: travel, startRadius: 58)
+                lvl1.fit(count: node.children,
+                         preferredCenter: RadialLayout.openSpaceDirection(from: parent, bounds: bounds),
+                         startRadius: 56, radiusCap: 72)
                 assertOnScreen(lvl1, count: node.children)
                 XCTAssertGreaterThanOrEqual(minPairDistance(lvl1, count: node.children), 30,
                     "children of \(anchor) idx \(idx) crowded")
                 for (ci, gcount) in node.grand.enumerated() where gcount > 0 {
                     let cpos = lvl1.position(forIndex: ci, count: node.children)
-                    let t2 = atan2(Double(cpos.y - parent.y), Double(cpos.x - parent.x)) * 180 / .pi
                     var lvl2 = RadialLayout(anchor: cpos, bounds: bounds)
-                    lvl2.fit(count: gcount, preferredCenter: t2, startRadius: 58)
+                    lvl2.fit(count: gcount,
+                             preferredCenter: RadialLayout.openSpaceDirection(from: cpos, bounds: bounds),
+                             startRadius: 56, radiusCap: 72)
                     assertOnScreen(lvl2, count: gcount)
                     XCTAssertGreaterThanOrEqual(minPairDistance(lvl2, count: gcount), 30,
                         "grandchildren of \(anchor) idx \(idx).\(ci) crowded")

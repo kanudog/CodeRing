@@ -3,6 +3,31 @@
 
 import SwiftUI
 
+/// Renders an item symbol: an SF Symbol name, or "text:XX" for typographic
+/// icons (element abbreviations like Ca / Mg / HCO₃) in the same weight
+/// family so they read as siblings of the glyphs.
+public struct CRIconView: View {
+    let symbol: String
+    let size: CGFloat
+
+    public init(symbol: String, size: CGFloat = 15) {
+        self.symbol = symbol
+        self.size = size
+    }
+
+    public var body: some View {
+        if symbol.hasPrefix("text:") {
+            Text(symbol.dropFirst(5))
+                .font(.system(size: size * 0.8, weight: .heavy, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+        } else {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .bold))
+        }
+    }
+}
+
 public struct DemoBadge: View {
     var compact: Bool
 

@@ -28,11 +28,13 @@ public struct RadialLayout: Sendable, Equatable {
     // MARK: - Fitting
 
     /// All contiguous runs of degrees whose bubbles land fully on screen.
+    /// Samples the FULL circle (−270…90 covers every direction) — cascaded
+    /// fans near the top edge legitimately open downward.
     private func validRuns(radius r: CGFloat) -> [(lo: Double, hi: Double)] {
         var runs: [(lo: Double, hi: Double)] = []
         var runStart: Double? = nil
-        var deg = -260.0
-        while deg <= 80 {
+        var deg = -270.0
+        while deg <= 90 {
             let a = deg * .pi / 180
             let p = CGPoint(x: anchor.x + r * cos(a), y: anchor.y + r * sin(a))
             let ok = p.x >= 22 && p.x <= bounds.width - 22 &&
@@ -41,18 +43,30 @@ public struct RadialLayout: Sendable, Equatable {
             if !ok, let s = runStart { runs.append((s, deg - 3)); runStart = nil }
             deg += 3
         }
-        if let s = runStart { runs.append((s, 80)) }
+        if let s = runStart { runs.append((s, 90)) }
         return runs
     }
 
     /// Choose arcStart/arcEnd/radius for `count` bubbles: enough angular
     /// spacing for the minimum chord, centered on the preferred direction.
+    /// Direction (degrees) from a point toward the roomiest part of the
+    /// screen — cascaded fans open here so children never pile into an edge.
+    public static func openSpaceDirection(from p: CGPoint, bounds: CGSize) -> Double {
+        let target = CGPoint(x: bounds.width / 2, y: bounds.height * 0.48)
+        let dx = Double(target.x - p.x), dy = Double(target.y - p.y)
+        // Finger already at the middle → any direction works; prefer up.
+        if (dx * dx + dy * dy).squareRoot() < 24 { return -90 }
+        return atan2(dy, dx) * 180 / .pi
+    }
+
     /// Prefers the nearest window that actually FITS the whole span (a tiny
     /// sliver next to the preferred direction must never beat a roomy window
     /// further away); radius grows until one fits, then the widest window
     /// takes the squeeze.
-    public mutating func fit(count: Int, preferredCenter: Double?, startRadius: CGFloat) {
-        let want = preferredCenter ?? -90
+    public mutating func fit(count: Int, preferredCenter: Double?, startRadius: CGFloat,
+                             radiusCap: CGFloat = RadialLayout.maxRadius) {
+        var want = preferredCenter ?? -90
+        if want > 90 { want -= 360 }   // sampling domain is −270…90
 
         func place(_ run: (lo: Double, hi: Double), span: Double, r: CGFloat) {
             let half = min(span, run.hi - run.lo) / 2
@@ -62,10 +76,12 @@ public struct RadialLayout: Sendable, Equatable {
             arcEnd = center + half
         }
 
-        // Radii to try: grow from the start ring, then shrink below it.
+        // Radii to try: grow from the start ring (up to the cap), then
+        // shrink below it. A tight cap keeps cascaded fans a uniform
+        // finger-reach from the touch point.
         var candidates: [CGFloat] = []
         var g = startRadius
-        while g <= Self.maxRadius { candidates.append(g); g += 12 }
+        while g <= radiusCap { candidates.append(g); g += 12 }
         var s = startRadius - 12
         while s >= 40 { candidates.append(s); s -= 12 }
 
