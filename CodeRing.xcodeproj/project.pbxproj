@@ -9,7 +9,7 @@
 /* Begin PBXBuildFile section */
 		C0DE0000000000000000A01B /* CodeCore in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE0000000000000000A01A /* CodeCore */; };
 		C0DE0000000000000000A02B /* CodeCore in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE0000000000000000A02A /* CodeCore */; };
-		C0DE0000000000000000A041 /* CodeRing Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000A021 /* CodeRing Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		C0DE0000000000000000A041 /* CodeRing Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000A021 /* CodeRing Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
