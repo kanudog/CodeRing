@@ -133,11 +133,17 @@ public struct RadialLayout: Sendable, Equatable {
     /// into a neighbor, the label tries above, then below, then beside its
     /// own bubble — whichever spot is actually CLEAR of the other bubbles.
     public func labelPosition(forIndex i: Int, count: Int) -> CGPoint {
-        let deg = angle(forIndex: i, count: count)
-        let a = deg * .pi / 180
         let bubble = position(forIndex: i, count: count)
         let others = (0..<count).filter { $0 != i }
             .map { position(forIndex: $0, count: count) }
+        return labelPosition(around: anchor, bubble: bubble, others: others)
+    }
+
+    /// Point-based variant — hand-placed (override) bubbles use the same
+    /// label rules, with the outward direction taken from center → bubble.
+    public func labelPosition(around center: CGPoint, bubble: CGPoint,
+                              others: [CGPoint]) -> CGPoint {
+        let a = atan2(Double(bubble.y - center.y), Double(bubble.x - center.x))
         func clear(_ p: CGPoint) -> Bool {
             p.y >= 8 && p.y <= bounds.height - 10 &&
             others.allSatisfy { hypot($0.x - p.x, $0.y - p.y) > 32 }
@@ -151,10 +157,113 @@ public struct RadialLayout: Sendable, Equatable {
         }
         // Shallow arc ends: "outward" is sideways — stack instead.
         if abs(sin(a)) < 0.45 { return stacked() }
-        let r = radius + 30
-        let p = CGPoint(x: anchor.x + r * cos(a), y: anchor.y + r * sin(a))
+        let r = CGFloat(hypot(Double(bubble.x - center.x), Double(bubble.y - center.y))) + 30
+        let p = CGPoint(x: center.x + r * CGFloat(cos(a)), y: center.y + r * CGFloat(sin(a)))
         // Off the top edge → fall back to stacking.
         if p.y < 14 { return stacked() }
         return p
     }
+}
+
+// MARK: - Hand-placed fan layouts (Sebastian, layout-editor export 2026-07-14)
+
+/// A fixed arrangement for one fan. Sub-fan values are OFFSETS from the
+/// parent bubble (the finger point) so the whole arrangement rides along if
+/// the parent ever moves; `absolute` marks root fans placed in screen points.
+public struct FanOverride: Sendable {
+    public let items: [Int: CGPoint]     // item index → offset (or absolute)
+    public let back: CGPoint?
+    public let cancel: CGPoint?
+    public let absolute: Bool
+
+    public init(items: [Int: CGPoint], back: CGPoint? = nil,
+                cancel: CGPoint? = nil, absolute: Bool = false) {
+        self.items = items; self.back = back; self.cancel = cancel
+        self.absolute = absolute
+    }
+}
+
+public enum FanLayoutOverrides {
+
+    /// Root-anchor id → table key (only overridden roots listed).
+    public static func key(forRootAnchor id: String) -> String? {
+        id == "shock" ? "shockRoot" : nil
+    }
+
+    /// Parent item id ("grp:*") → table key.
+    public static func key(forParentItem id: String) -> String? {
+        switch id {
+        case "grp:access": return "access"
+        case "grp:airway": return "airway"
+        case "grp:comms": return "comms"
+        case "grp:call": return "call"
+        case "grp:arrival": return "arrival"
+        case "grp:temp": return "temp"
+        case "grp:fluids": return "fluids"
+        case "grp:more": return "moreVol"
+        case "grp:defib": return "defib"
+        default: return nil
+        }
+    }
+
+    public static let table: [String: FanOverride] = [
+        // Shock root — absolute: Defib rides high center-right, Cardiovert below it.
+        "shockRoot": FanOverride(items: [0: CGPoint(x: 116, y: 38),
+                                         1: CGPoint(x: 142, y: 96)],
+                                 absolute: true),
+        // Access (parent at ~(37,110)): IV → IO → Art line sweep up-right.
+        "access": FanOverride(items: [0: CGPoint(x: -8, y: -71),
+                                      1: CGPoint(x: 38, y: -60),
+                                      2: CGPoint(x: 65, y: -24)],
+                              back: CGPoint(x: 62, y: 46),
+                              cancel: CGPoint(x: 1, y: 50)),
+        // Airway (parent ~(76,83)): Mask/ETT up top, BVM/Trach at the sides.
+        "airway": FanOverride(items: [0: CGPoint(x: 23, y: -47),
+                                      1: CGPoint(x: -51, y: -6),
+                                      2: CGPoint(x: -25, y: -47),
+                                      3: CGPoint(x: 50, y: -6)],
+                              back: CGPoint(x: 23, y: 72),
+                              cancel: CGPoint(x: -46, y: 62)),
+        // Comms (parent ~(123,83)).
+        "comms": FanOverride(items: [0: CGPoint(x: -36, y: -40),
+                                     1: CGPoint(x: -54, y: 13)],
+                             back: CGPoint(x: -24, y: 72),
+                             cancel: CGPoint(x: 46, y: 70)),
+        // Call (parent = Comms▸Call at ~(87,43)): arc down the right side.
+        "call": FanOverride(items: [0: CGPoint(x: 68, y: -18),
+                                    1: CGPoint(x: 64, y: 24),
+                                    2: CGPoint(x: 40, y: 60),
+                                    3: CGPoint(x: -4, y: 67)],
+                            back: CGPoint(x: -58, y: 39),
+                            cancel: CGPoint(x: -60, y: -24)),
+        // Arrival (parent ~(69,96)): arc across the top.
+        "arrival": FanOverride(items: [0: CGPoint(x: -37, y: -54),
+                                       1: CGPoint(x: 12, y: -52),
+                                       2: CGPoint(x: 50, y: -21),
+                                       3: CGPoint(x: 43, y: 26)],
+                               back: CGPoint(x: -39, y: 49),
+                               cancel: CGPoint(x: -49, y: 2)),
+        // Temp (parent ~(161,110)): devices keep the auto-fit; pads placed.
+        "temp": FanOverride(items: [:],
+                            back: CGPoint(x: 16, y: 53),
+                            cancel: CGPoint(x: -131, y: 34)),
+        // Fluids (parent ~(174,37)): Blood/10/20 cascade down-left.
+        "fluids": FanOverride(items: [0: CGPoint(x: -62, y: -10),
+                                      1: CGPoint(x: -55, y: 34),
+                                      2: CGPoint(x: -20, y: 63)],
+                              back: CGPoint(x: 1, y: 112),
+                              cancel: CGPoint(x: -144, y: 107)),
+        // More/volume (parent ~(61,159)): Drip/Mag up, Naloxone right.
+        "moreVol": FanOverride(items: [0: CGPoint(x: -25, y: -64),
+                                       1: CGPoint(x: 26, y: -60),
+                                       2: CGPoint(x: 58, y: -18)],
+                               back: CGPoint(x: -45, y: 17),
+                               cancel: CGPoint(x: -41, y: -138)),
+        // Defib rungs (parent = fixed Defib at (116,38)): ladder down-left.
+        "defib": FanOverride(items: [0: CGPoint(x: -54, y: 1),
+                                     1: CGPoint(x: -33, y: 44),
+                                     2: CGPoint(x: 13, y: 63)],
+                             back: CGPoint(x: 59, y: -14),
+                             cancel: CGPoint(x: 54, y: 122))
+    ]
 }

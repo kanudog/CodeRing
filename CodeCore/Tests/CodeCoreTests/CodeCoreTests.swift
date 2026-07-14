@@ -197,6 +197,119 @@ final class RadialLayoutTests: XCTestCase {
             }
         }
     }
+
+    /// Sebastian's hand-placed layouts (FanLayoutOverrides) must reproduce
+    /// EXACTLY what he drew in the layout editor: parents resolved through
+    /// the same fit chain the watch runs must sit where the editor showed
+    /// them, and no offset position may be displaced by the screen clamp.
+    /// Two coordinate spaces on purpose: the EDITOR previewed root fits at
+    /// 198×191, but the live GeometryReader is 194×191 (2 pt side insets,
+    /// probe-measured on the 45 mm sim) — offsets were derived in editor
+    /// space and must survive the clamp at the live parents.
+    func testFanLayoutOverridesMatchEditorExport() {
+        // Roots exactly as LiveSessionView opens them (anchor, count, radius).
+        var events = RadialLayout(anchor: CGPoint(x: 99, y: 155), bounds: bounds)
+        events.fit(count: 6, preferredCenter: nil, startRadius: 76)
+        var volume = RadialLayout(anchor: CGPoint(x: 168.3, y: 145), bounds: bounds)
+        volume.fit(count: 5, preferredCenter: nil, startRadius: 84)
+
+        // Level-3 parents (Call/Arrival) live inside the overridden comms fan.
+        let comms = events.position(forIndex: 3, count: 6)
+        guard let commsOv = FanLayoutOverrides.table["comms"],
+              let callOff = commsOv.items[0], let arrivalOff = commsOv.items[1],
+              let shockOv = FanLayoutOverrides.table["shockRoot"],
+              let defibFixed = shockOv.items[0] else {
+            return XCTFail("comms/shockRoot overrides missing from table")
+        }
+
+        // (key, parent via live fit chain, parent per the editor export)
+        let parents: [(String, CGPoint, CGPoint)] = [
+            ("access",  events.position(forIndex: 1, count: 6), CGPoint(x: 37, y: 110)),
+            ("airway",  events.position(forIndex: 2, count: 6), CGPoint(x: 76, y: 83)),
+            ("comms",   comms,                                  CGPoint(x: 123, y: 83)),
+            ("call",    CGPoint(x: comms.x + callOff.x, y: comms.y + callOff.y),
+                        CGPoint(x: 87, y: 43)),
+            ("arrival", CGPoint(x: comms.x + arrivalOff.x, y: comms.y + arrivalOff.y),
+                        CGPoint(x: 69, y: 96)),
+            ("temp",    events.position(forIndex: 4, count: 6), CGPoint(x: 161, y: 110)),
+            ("moreVol", volume.position(forIndex: 0, count: 5), CGPoint(x: 61, y: 159)),
+            ("fluids",  volume.position(forIndex: 4, count: 5), CGPoint(x: 174, y: 37)),
+            ("defib",   defibFixed,                             CGPoint(x: 116, y: 38))
+        ]
+
+        for (key, live, editor) in parents {
+            // Offsets were authored against the editor's parent; if the live
+            // fit drifts, everything Sebastian placed lands somewhere else.
+            XCTAssertEqual(live.x, editor.x, accuracy: 1.5, "\(key) parent x drifted from editor")
+            XCTAssertEqual(live.y, editor.y, accuracy: 1.5, "\(key) parent y drifted from editor")
+            guard let ov = FanLayoutOverrides.table[key] else {
+                XCTFail("override \(key) missing from table"); continue
+            }
+            var pts = ov.items.values.map { CGPoint(x: live.x + $0.x, y: live.y + $0.y) }
+            if let b = ov.back { pts.append(CGPoint(x: live.x + b.x, y: live.y + b.y)) }
+            if let c = ov.cancel { pts.append(CGPoint(x: live.x + c.x, y: live.y + c.y)) }
+            for p in pts {
+                // Watch clamp: x∈[18, W−18], y∈[16, H−16]. ≤3 pt of slack for
+                // pads placed right on the editor's slightly looser margin.
+                XCTAssertEqual(p.x, min(max(p.x, 18), bounds.width - 18), accuracy: 3,
+                               "\(key) point clamped away from where it was drawn")
+                XCTAssertEqual(p.y, min(max(p.y, 16), bounds.height - 16), accuracy: 3,
+                               "\(key) point clamped away from where it was drawn")
+            }
+        }
+
+        // shockRoot absolutes stay on screen as-is.
+        for p in shockOv.items.values {
+            XCTAssertEqual(p.x, min(max(p.x, 18), bounds.width - 18), accuracy: 0.01)
+            XCTAssertEqual(p.y, min(max(p.y, 16), bounds.height - 16), accuracy: 0.01)
+        }
+
+        // LIVE space (194 wide): re-resolve every parent with the real
+        // runtime bounds and require the clamp to move nothing by more than
+        // a few points — the drawn arrangement survives on the actual watch.
+        let live = CGSize(width: 194, height: 191)
+        var liveEvents = RadialLayout(anchor: CGPoint(x: 97, y: 155), bounds: live)
+        liveEvents.fit(count: 6, preferredCenter: nil, startRadius: 76)
+        var liveVolume = RadialLayout(anchor: CGPoint(x: 194 * 0.85, y: 145), bounds: live)
+        liveVolume.fit(count: 5, preferredCenter: nil, startRadius: 84)
+        let liveComms = liveEvents.position(forIndex: 3, count: 6)
+        let liveParents: [(String, CGPoint)] = [
+            ("access",  liveEvents.position(forIndex: 1, count: 6)),
+            ("airway",  liveEvents.position(forIndex: 2, count: 6)),
+            ("comms",   liveComms),
+            ("call",    CGPoint(x: liveComms.x + callOff.x, y: liveComms.y + callOff.y)),
+            ("arrival", CGPoint(x: liveComms.x + arrivalOff.x, y: liveComms.y + arrivalOff.y)),
+            ("temp",    liveEvents.position(forIndex: 4, count: 6)),
+            ("moreVol", liveVolume.position(forIndex: 0, count: 5)),
+            ("fluids",  liveVolume.position(forIndex: 4, count: 5)),
+            ("defib",   defibFixed)
+        ]
+        for (key, parent) in liveParents {
+            guard let ov = FanLayoutOverrides.table[key] else { continue }
+            var pts = ov.items.values.map { CGPoint(x: parent.x + $0.x, y: parent.y + $0.y) }
+            if let b = ov.back { pts.append(CGPoint(x: parent.x + b.x, y: parent.y + b.y)) }
+            if let c = ov.cancel { pts.append(CGPoint(x: parent.x + c.x, y: parent.y + c.y)) }
+            for p in pts {
+                XCTAssertEqual(p.x, min(max(p.x, 18), live.width - 18), accuracy: 6,
+                               "\(key) clamps >6 pt on the live watch")
+                XCTAssertEqual(p.y, min(max(p.y, 16), live.height - 16), accuracy: 6,
+                               "\(key) clamps >6 pt on the live watch")
+            }
+        }
+
+        // Key routing: shock root only, and every grp:* parent that was edited.
+        XCTAssertEqual(FanLayoutOverrides.key(forRootAnchor: "shock"), "shockRoot")
+        XCTAssertNil(FanLayoutOverrides.key(forRootAnchor: "events"))
+        let mapping = [("grp:access", "access"), ("grp:airway", "airway"),
+                       ("grp:comms", "comms"), ("grp:call", "call"),
+                       ("grp:arrival", "arrival"), ("grp:temp", "temp"),
+                       ("grp:fluids", "fluids"), ("grp:more", "moreVol"),
+                       ("grp:defib", "defib")]
+        for (gid, key) in mapping {
+            XCTAssertEqual(FanLayoutOverrides.key(forParentItem: gid), key)
+            XCTAssertNotNil(FanLayoutOverrides.table[FanLayoutOverrides.key(forParentItem: gid)!])
+        }
+    }
 }
 
 @MainActor

@@ -25,6 +25,61 @@ final class WatchDriverTests: XCTestCase {
         XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10), "weight page not shown")
     }
 
+    /// v12: Sebastian's hand-placed fan layouts (FanLayoutOverrides).
+    /// Holds each overridden fan open ~3 s for the screenshot burst.
+    /// Coordinates: editor geo (198×191) → test ≈ same x, y + (frame.height
+    /// − 191). The live GeometryReader is really 194×191 (2 pt side insets),
+    /// so drag targets land ≤5 pt off live parents — well inside the 40 pt
+    /// hit radius. Run on the 45 mm Series 9 sim ONLY.
+    func testV12_fixedLayouts() throws {
+        ring.terminate(); sleep(1); ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START'")).firstMatch.tap()
+        let skip = ring.buttons["SKIP"]
+        XCTAssertTrue(skip.waitForExistence(timeout: 8)); skip.tap()
+        let startCPR = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch
+        XCTAssertTrue(startCPR.waitForExistence(timeout: 8)); startCPR.tap()
+        sleep(1)
+
+        let f = ring.frame
+        let dy = f.height - 191          // geo-y → test-y
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        /// Press an anchor, drag to a geo-space target, hold there.
+        func hold(fromX ax: CGFloat, fromY ay: CGFloat,
+                  toGeoX gx: CGFloat, toGeoY gy: CGFloat, seconds: Double) {
+            at(ax, ay).press(forDuration: 0.5, thenDragTo: at(gx, gy + dy),
+                             withVelocity: .slow, thenHoldForDuration: seconds)
+            usleep(700_000)
+        }
+        let shockX = f.width * 0.885, shockY = 45.8 + dy   // shock anchor
+        let eventsX = f.width * 0.5, eventsY = f.height - 36
+        let volX = f.width * 0.85, volY = f.height - 46
+
+        // 1 · shock root fan: Defib top-center (116,38), Cardiovert (142,96).
+        // Held at empty geo (90,130) — >40 pt from both, so nothing fires.
+        hold(fromX: shockX, fromY: shockY, toGeoX: 90, toGeoY: 130, seconds: 3.0)
+
+        // 2 · defib rungs fan off the FIXED Defib bubble (dwell 1 s → expand).
+        hold(fromX: shockX, fromY: shockY, toGeoX: 116, toGeoY: 38, seconds: 3.6)
+
+        // 3–6 · events sub-fans at their editor parents.
+        hold(fromX: eventsX, fromY: eventsY, toGeoX: 37, toGeoY: 110, seconds: 3.6)  // access
+        hold(fromX: eventsX, fromY: eventsY, toGeoX: 76, toGeoY: 83, seconds: 3.6)   // airway
+        hold(fromX: eventsX, fromY: eventsY, toGeoX: 123, toGeoY: 83, seconds: 3.6)  // comms
+        hold(fromX: eventsX, fromY: eventsY, toGeoX: 161, toGeoY: 110, seconds: 3.6) // temp pads
+
+        // 7–8 · volume sub-fans.
+        hold(fromX: volX, fromY: volY, toGeoX: 174, toGeoY: 37, seconds: 3.6)        // fluids
+        hold(fromX: volX, fromY: volY, toGeoX: 61, toGeoY: 159, seconds: 3.6)        // more
+
+        // Nothing may have logged: every hold released over a parent or gap.
+        XCTAssertFalse(ring.staticTexts["CARD"].exists, "cardiovert fired accidentally")
+        sleep(2)
+    }
+
     /// v11: chip cap + epi-protected eviction, collision-free columns,
     /// opposite back/✕ pads, art-line access branch, ROSC 3+3 chips.
     func testV11_chipCapAndRosc() throws {

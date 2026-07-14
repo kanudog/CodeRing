@@ -54,6 +54,7 @@ final class RadialMenuModel {
         let cancelPos: CGPoint
         let breadcrumb: String?
         let layout: RadialLayout
+        let fixedPos: [Int: CGPoint]
     }
 
     var isOpen = false
@@ -71,6 +72,8 @@ final class RadialMenuModel {
     private(set) var cancelPos: CGPoint = .zero
 
     private(set) var items: [RadialItem] = []
+    /// Hand-placed positions (FanLayoutOverrides) — beat the fitted arc.
+    private var fixedPos: [Int: CGPoint] = [:]
     /// Geometry for the CURRENT level. Its anchor is the "focus center":
     /// the root puck at level 0, then the tapped item's position at every
     /// deeper level — so the fan always grows around the finger.
@@ -86,7 +89,7 @@ final class RadialMenuModel {
     // MARK: - Lifecycle
 
     func open(anchor: CGPoint, radius: CGFloat, bounds: CGSize,
-              items: [RadialItem], tapMode: Bool,
+              items: [RadialItem], tapMode: Bool, key: String? = nil,
               onSelect: @escaping (RadialItem) -> Void) {
         self.rootAnchor = anchor
         self.layout = RadialLayout(anchor: anchor, bounds: bounds)
@@ -100,6 +103,15 @@ final class RadialMenuModel {
         self.cancelPos = anchor
         self.stack = []
         self.lastLocation = nil
+        // Hand-placed root layout (absolute points), if one exists.
+        self.fixedPos = [:]
+        if let k = key.flatMap(FanLayoutOverrides.key(forRootAnchor:)),
+           let ov = FanLayoutOverrides.table[k] {
+            for (i, p) in ov.items where i < items.count {
+                fixedPos[i] = clampToScreen(p)
+            }
+            if let c = ov.cancel { cancelPos = clampToScreen(c) }
+        }
         self.isOpen = true
         WatchHaptics.play(.start)
     }
@@ -116,6 +128,7 @@ final class RadialMenuModel {
         backPos = nil
         stack = []
         lastLocation = nil
+        fixedPos = [:]
         onSelect = nil
     }
 
@@ -126,11 +139,15 @@ final class RadialMenuModel {
     }
 
     func position(forIndex i: Int, count: Int) -> CGPoint {
-        layout.position(forIndex: i, count: count)
+        fixedPos[i] ?? layout.position(forIndex: i, count: count)
     }
 
     func labelPosition(forIndex i: Int, count: Int) -> CGPoint {
-        layout.labelPosition(forIndex: i, count: count)
+        // Measured against the REAL bubble positions (fixed or fitted), so
+        // hand-placed fans get the same collision-free labels as fitted ones.
+        let bubble = position(forIndex: i, count: count)
+        let others = (0..<count).filter { $0 != i }.map { position(forIndex: $0, count: count) }
+        return layout.labelPosition(around: layout.anchor, bubble: bubble, others: others)
     }
 
     // MARK: - Hold-drag flow
@@ -225,13 +242,13 @@ final class RadialMenuModel {
         dwellTask?.cancel()
         dwellTask = nil
         guard let idx = items.firstIndex(of: parent) else { return }
-        let parentPos = layout.position(forIndex: idx, count: items.count)
+        let parentPos = position(forIndex: idx, count: items.count)   // fixed-aware
         // Fan toward the roomiest part of the screen, one finger-reach out —
         // children never pile into an edge or under other elements.
         let open = RadialLayout.openSpaceDirection(from: parentPos, bounds: layout.bounds)
 
         stack.append(Level(items: items, backPos: backPos, cancelPos: cancelPos,
-                           breadcrumb: breadcrumb, layout: layout))
+                           breadcrumb: breadcrumb, layout: layout, fixedPos: fixedPos))
         breadcrumb = parent.title
         items = children
         hoveredID = nil
@@ -247,6 +264,23 @@ final class RadialMenuModel {
                                         y: parentPos.y + 40 * sin(opp)))
         cancelPos = clampToScreen(CGPoint(x: parentPos.x + 78 * cos(opp),
                                           y: parentPos.y + 78 * sin(opp)))
+
+        // Hand-placed sub-fan: offsets ride the finger point, so the
+        // arrangement is exactly what was drawn in the layout editor.
+        fixedPos = [:]
+        if let k = FanLayoutOverrides.key(forParentItem: parent.id),
+           let ov = FanLayoutOverrides.table[k] {
+            for (i, p) in ov.items where i < children.count {
+                fixedPos[i] = clampToScreen(CGPoint(x: parentPos.x + p.x,
+                                                    y: parentPos.y + p.y))
+            }
+            if let b = ov.back {
+                backPos = clampToScreen(CGPoint(x: parentPos.x + b.x, y: parentPos.y + b.y))
+            }
+            if let c = ov.cancel {
+                cancelPos = clampToScreen(CGPoint(x: parentPos.x + c.x, y: parentPos.y + c.y))
+            }
+        }
         WatchHaptics.play(.success)        // the "pop" that ends the dwell ramp
     }
 
@@ -260,6 +294,7 @@ final class RadialMenuModel {
         cancelPos = level.cancelPos
         breadcrumb = level.breadcrumb
         layout = level.layout
+        fixedPos = level.fixedPos
         hoveredID = nil
         hoveringBack = false
         WatchHaptics.play(.directionDown)
@@ -356,7 +391,8 @@ struct RadialAnchor: View {
                 switch value {
                 case .first(true):
                     model.open(anchor: center, radius: radius, bounds: bounds,
-                               items: items(), tapMode: false, onSelect: onSelect)
+                               items: items(), tapMode: false, key: id,
+                               onSelect: onSelect)
                 case .second(true, let drag):
                     if let drag { model.updateDrag(drag.location) }
                 default:
@@ -374,7 +410,8 @@ struct RadialAnchor: View {
             tapAction()
         } else {
             model.open(anchor: center, radius: radius, bounds: bounds,
-                       items: items(), tapMode: true, onSelect: onSelect)
+                       items: items(), tapMode: true, key: id,
+                       onSelect: onSelect)
         }
     }
 }
