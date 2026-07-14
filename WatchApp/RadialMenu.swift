@@ -51,20 +51,24 @@ final class RadialMenuModel {
     private struct Level {
         let items: [RadialItem]
         let backPos: CGPoint?
+        let cancelPos: CGPoint
         let breadcrumb: String?
         let layout: RadialLayout
     }
 
     var isOpen = false
     var tapMode = false
-    /// The ORIGINAL puck — the ✕ pad and cancel zone live here forever.
+    /// The ORIGINAL puck (cancel home at the root level).
     private(set) var rootAnchor: CGPoint = .zero
     var hoveredID: String? = nil
-    var hoveringCancel = false         // finger over the origin ✕ pad
+    var hoveringCancel = false         // finger over the ✕ pad
     var hoveringBack = false           // finger over the back chevron pad
     var breadcrumb: String? = nil      // parent title while in a sub-arc
-    /// Drag here to pop a level — the previous focus center.
+    /// Drag here to pop a level — sits opposite the fan from the finger.
     private(set) var backPos: CGPoint? = nil
+    /// Drag here to bail out entirely — beyond the back pad on the same line
+    /// (the root puck itself at level 0).
+    private(set) var cancelPos: CGPoint = .zero
 
     private(set) var items: [RadialItem] = []
     /// Geometry for the CURRENT level. Its anchor is the "focus center":
@@ -93,6 +97,7 @@ final class RadialMenuModel {
         self.hoveredID = nil
         self.breadcrumb = nil
         self.backPos = nil
+        self.cancelPos = anchor
         self.stack = []
         self.lastLocation = nil
         self.isOpen = true
@@ -134,9 +139,8 @@ final class RadialMenuModel {
         guard isOpen, !tapMode else { return }
         lastLocation = location
 
-        // Finger back over the ORIGIN pad = armed to cancel everything.
-        let fromRoot = hypot(location.x - rootAnchor.x, location.y - rootAnchor.y)
-        if fromRoot <= 28, stack.isEmpty || distance(rootAnchor, backPos) > 30 {
+        // Finger over the ✕ pad = armed to cancel everything.
+        if distance(location, cancelPos) <= 26 {
             if !hoveringCancel {
                 hoveringCancel = true
                 WatchHaptics.play(.click)
@@ -207,15 +211,16 @@ final class RadialMenuModel {
         return hypot(a.x - b.x, a.y - b.y)
     }
 
-    /// Hide the ✕ when the back pad occupies the same spot (level 1, where
-    /// "back to the origin" reads as back-to-root, not cancel).
-    var showCancelPad: Bool {
-        backPos == nil || distance(rootAnchor, backPos) > 30
+    private func clampToScreen(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: min(max(p.x, 18), layout.bounds.width - 18),
+                y: min(max(p.y, 16), layout.bounds.height - 16))
     }
 
     /// The cascade: the tapped item's position becomes the CENTER of the
     /// next fan — options radiate outward from wherever the finger is, so
     /// navigating deep never means reaching back across the screen.
+    /// Back and ✕ sit DIRECTLY OPPOSITE the fan from the finger (the one
+    /// direction guaranteed empty), back nearer, ✕ beyond it.
     private func expand(_ parent: RadialItem, children: [RadialItem]) {
         dwellTask?.cancel()
         dwellTask = nil
@@ -225,9 +230,8 @@ final class RadialMenuModel {
         // children never pile into an edge or under other elements.
         let open = RadialLayout.openSpaceDirection(from: parentPos, bounds: layout.bounds)
 
-        stack.append(Level(items: items, backPos: backPos, breadcrumb: breadcrumb,
-                           layout: layout))
-        backPos = layout.anchor            // drag back the way you came = pop
+        stack.append(Level(items: items, backPos: backPos, cancelPos: cancelPos,
+                           breadcrumb: breadcrumb, layout: layout))
         breadcrumb = parent.title
         items = children
         hoveredID = nil
@@ -236,6 +240,13 @@ final class RadialMenuModel {
         // touch point; the cap keeps them within easy reach even squeezed.
         layout.fit(count: children.count, preferredCenter: open,
                    startRadius: 56, radiusCap: 72)
+
+        // Exits opposite the fitted fan's center direction.
+        let opp = ((layout.arcStart + layout.arcEnd) / 2 + 180) * .pi / 180
+        backPos = clampToScreen(CGPoint(x: parentPos.x + 40 * cos(opp),
+                                        y: parentPos.y + 40 * sin(opp)))
+        cancelPos = clampToScreen(CGPoint(x: parentPos.x + 78 * cos(opp),
+                                          y: parentPos.y + 78 * sin(opp)))
         WatchHaptics.play(.success)        // the "pop" that ends the dwell ramp
     }
 
@@ -246,6 +257,7 @@ final class RadialMenuModel {
         dwellTask = nil
         items = level.items
         backPos = level.backPos
+        cancelPos = level.cancelPos
         breadcrumb = level.breadcrumb
         layout = level.layout
         hoveredID = nil
@@ -434,26 +446,24 @@ struct RadialMenuOverlay: View {
                     .onTapGesture { model.tapBack() }
                 }
 
-                // ✕ pad at the ROOT anchor — drag back here (or tap in tap
-                // mode) to bail out without logging anything. Hidden when the
-                // level-1 back pad occupies the same spot.
-                if model.showCancelPad {
-                    ZStack {
-                        Circle()
-                            .fill(model.hoveringCancel ? CRTheme.surfaceHi : CRTheme.surface.opacity(0.6))
-                        Circle()
-                            .strokeBorder(.white.opacity(model.hoveringCancel ? 0.8 : 0.35),
-                                          lineWidth: 1.5)
-                        Image(systemName: "xmark")
-                            .font(.system(size: 12, weight: .heavy))
-                            .foregroundStyle(model.hoveringCancel ? CRTheme.text : CRTheme.textDim)
-                    }
-                    .frame(width: 34, height: 34)
-                    .scaleEffect(model.hoveringCancel ? 1.2 : 1.0)
-                    .animation(.spring(duration: 0.15), value: model.hoveringCancel)
-                    .position(model.rootAnchor)
-                    .onTapGesture { model.tapClose() }
+                // ✕ pad — the root puck at level 0, then directly opposite
+                // the fan from the finger (beyond the back chevron) so it
+                // never sits on top of other elements.
+                ZStack {
+                    Circle()
+                        .fill(model.hoveringCancel ? CRTheme.surfaceHi : CRTheme.surface.opacity(0.6))
+                    Circle()
+                        .strokeBorder(.white.opacity(model.hoveringCancel ? 0.8 : 0.35),
+                                      lineWidth: 1.5)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .heavy))
+                        .foregroundStyle(model.hoveringCancel ? CRTheme.text : CRTheme.textDim)
                 }
+                .frame(width: 34, height: 34)
+                .scaleEffect(model.hoveringCancel ? 1.2 : 1.0)
+                .animation(.spring(duration: 0.15), value: model.hoveringCancel)
+                .position(model.cancelPos)
+                .onTapGesture { model.tapClose() }
 
                 // Readout chip — the hovered item's name, big and glanceable
                 VStack(spacing: 1) {

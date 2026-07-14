@@ -25,6 +25,77 @@ final class WatchDriverTests: XCTestCase {
         XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10), "weight page not shown")
     }
 
+    /// v11: chip cap + epi-protected eviction, collision-free columns,
+    /// opposite back/✕ pads, art-line access branch, ROSC 3+3 chips.
+    func testV11_chipCapAndRosc() throws {
+        ring.terminate(); sleep(1); ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START'")).firstMatch.tap()
+        let skip = ring.buttons["SKIP"]
+        XCTAssertTrue(skip.waitForExistence(timeout: 8)); skip.tap()
+        let startCPR = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch
+        XCTAssertTrue(startCPR.waitForExistence(timeout: 8)); startCPR.tap()
+        sleep(1)
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        let sideY = f.height - 46, centerY = f.height - 36
+        let cx = f.width * 0.15, vx = f.width * 0.85
+
+        // Seven distinct items: 5 rhythm/code meds + dextrose + calcium.
+        // Eviction must drop ATROPINE (stalest after protected epi).
+        let targets: [(CGFloat, CGFloat, CGFloat)] = [
+            (cx, cx - 8, -108),    // epi
+            (cx, cx + 38.5, -101), // atropine
+            (cx, cx + 78, -75),    // adenosine
+            (cx, cx + 102, -35),   // amiodarone
+            (cx, cx + 107, 12),    // lidocaine
+            (vx, vx - 38.5, -101), // dextrose
+            (vx, vx - 78, -75)     // calcium
+        ]
+        for (ax, tx, dy) in targets {
+            at(ax, sideY).press(forDuration: 0.5, thenDragTo: at(tx, sideY + dy),
+                                withVelocity: .slow, thenHoldForDuration: 0.6)
+            usleep(400_000)
+        }
+        XCTAssertTrue(ring.staticTexts["CA"].waitForExistence(timeout: 6), "CA chip missing")
+        XCTAssertTrue(ring.staticTexts["EPI"].exists, "protected EPI chip missing")
+        XCTAssertFalse(ring.staticTexts["ATRO"].exists, "stalest chip was not evicted")
+        sleep(3)   // shot: 4 left + 2 right, clear of SHOCK
+
+        // Access → art line fan (opposite back/✕ pads for the burst).
+        at(f.width * 0.5, centerY).press(forDuration: 0.5,
+                                         thenDragTo: at(f.width * 0.5 - 61.5, centerY - 44.7),
+                                         withVelocity: .slow, thenHoldForDuration: 3.2)
+        sleep(1)
+
+        // ROSC via pulse check (20 s cycle override).
+        sleep(8)
+        let pc = ring.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'NEXT PULSE'")).firstMatch
+        XCTAssertTrue(pc.waitForExistence(timeout: 20)); pc.tap()
+        let found = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'PULSE FOUND'")).firstMatch
+        XCTAssertTrue(found.waitForExistence(timeout: 8)); found.tap()
+        let reArrest = ring.buttons["RE-ARREST"]
+        XCTAssertTrue(reArrest.waitForExistence(timeout: 8))
+        XCTAssertTrue(ring.staticTexts["EPI"].exists, "chips missing on ROSC screen")
+        sleep(3)   // shot: ROSC with 3+3 chips below RE-ARREST
+
+        // End & sync.
+        let topButtons = ring.buttons.allElementsBoundByIndex.filter {
+            $0.frame.minY >= 0 && $0.frame.midY < 60 && $0.isHittable
+        }
+        topButtons.max(by: { $0.frame.maxX < $1.frame.maxX })?.tap()
+        let end = ring.buttons["End & review"]
+        XCTAssertTrue(end.waitForExistence(timeout: 10))
+        end.tap()
+        sleep(4)
+    }
+
     /// v10: PALS tile picker (tap generic / hold-refine), SKIP shortcuts,
     /// inline ×N chips, DEX abbreviation, condensed log.
     func testV10_pickerAndSkip() throws {

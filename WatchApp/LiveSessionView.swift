@@ -146,12 +146,18 @@ struct LiveSessionView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            // Left gutter takes the first four; the next three sit BOTTOM-
-            // right, in the band between the shock button above and the
-            // volume anchor below (bottom padding keeps clocks clear of it).
-            .overlay(alignment: .leading) { medChipColumn(now: now, side: 0) }
-            .overlay(alignment: .bottomTrailing) {
-                medChipColumn(now: now, side: 1).padding(.bottom, 16)
+            // Left column pins to the TOP (clear of the Rhythm/Code puck);
+            // the right column tucks into the band between the shock label
+            // and the volume anchor — or mirrors the left below RE-ARREST
+            // once ROSC hides the shock button (3 + 3).
+            .overlay(alignment: .topLeading) {
+                medChipColumn(now: now, side: 0)
+                    .padding(.top, engine.roscAchieved ? 32 : 2)
+            }
+            .overlay(alignment: engine.roscAchieved ? .topTrailing : .bottomTrailing) {
+                medChipColumn(now: now, side: 1)
+                    .padding(.top, engine.roscAchieved ? 32 : 0)
+                    .padding(.bottom, engine.roscAchieved ? 0 : 8)
             }
 
             Spacer(minLength: 48)   // anchor zone
@@ -227,8 +233,20 @@ struct LiveSessionView: View {
             if let seen = latest[key], seen.date > e.date { continue }
             latest[key] = e
         }
-        let slots = side == 0 ? Array(firstSeen.prefix(4))
-                              : Array(firstSeen.dropFirst(4).prefix(3))
+        // Six chips max on the main screen. Past that, the STALEST timer
+        // (oldest last dose) drops off — epinephrine never does. Everything
+        // stays in the Timers sheet regardless.
+        var keys = firstSeen
+        let epiKey = Defaults.epiID.uuidString
+        while keys.count > 6 {
+            guard let victim = keys.filter({ $0 != epiKey }).min(by: {
+                (latest[$0]?.date ?? .distantPast) < (latest[$1]?.date ?? .distantPast)
+            }) else { break }
+            keys.removeAll { $0 == victim }
+        }
+        let leftCount = engine.roscAchieved ? 3 : 4
+        let slots = side == 0 ? Array(keys.prefix(leftCount))
+                              : Array(keys.dropFirst(leftCount))
         let align: Alignment = side == 0 ? .leading : .trailing
 
         return VStack(spacing: 4) {
@@ -766,7 +784,8 @@ struct LiveSessionView: View {
         items.append(RadialItem(id: "grp:access", title: "Access",
                                 symbol: "cross.circle.fill", colorHex: access, children: [
             RadialItem(id: "grp:iv", title: "IV", symbol: "cross.vial.fill", colorHex: access, children: limbs("access.iv")),
-            RadialItem(id: "grp:io", title: "IO", symbol: "target", colorHex: access, children: limbs("access.io"))
+            RadialItem(id: "grp:io", title: "IO", symbol: "target", colorHex: access, children: limbs("access.io")),
+            RadialItem(id: "grp:art", title: "Art line", symbol: "waveform.path", colorHex: access, children: limbs("access.art"))
         ]))
 
         // Airway → intubation / bag / mask / trach
@@ -823,6 +842,7 @@ struct LiveSessionView: View {
             "12lead":         .init(title: "12-lead ECG", category: .rhythm, colorHex: CRTheme.rhythmHex),
             "access.iv":      .init(title: "IV access", category: .access, colorHex: CRTheme.accessHex),
             "access.io":      .init(title: "IO access", category: .access, colorHex: CRTheme.accessHex),
+            "access.art":     .init(title: "Arterial line", category: .access, colorHex: CRTheme.accessHex),
             "airway.ett":     .init(title: "Intubation", category: .airway, colorHex: CRTheme.airwayHex),
             "airway.bag":     .init(title: "Bag-mask", category: .airway, colorHex: CRTheme.airwayHex),
             "airway.mask":    .init(title: "Mask", category: .airway, colorHex: CRTheme.airwayHex),
