@@ -158,7 +158,7 @@ final class RadialLayoutTests: XCTestCase {
         let menus: [(CGPoint, Int, [Int: Node])] = [
             (CGPoint(x: 29.7, y: 145), 5, [:]),                      // rhythm/code: all leaves
             (CGPoint(x: 99, y: 155), 6, [                            // events
-                1: Node(children: 3, grand: [4, 4, 4]),              // access → IV/IO/art → limbs
+                1: Node(children: 3, grand: []),                     // access → IV/IO/art (leaves)
                 2: Node(children: 4, grand: []),                     // airway
                 3: Node(children: 2, grand: [4, 4]),                 // comms → call/arrival → services
                 4: Node(children: 3, grand: [])                      // temp devices

@@ -101,7 +101,7 @@ struct SetupFlowView: View {
                 CGPoint(x: geo.size.width * 0.5, y: 180)
             ]
             ZStack {
-                VStack {
+                VStack(spacing: 2) {
                     HStack(spacing: 4) {
                         backChevron { dismiss() }
                         eyebrow("CODE TYPE")
@@ -109,6 +109,9 @@ struct SetupFlowView: View {
                         DemoBadge(compact: true)
                         skipChip
                     }
+                    Text("tap to start · hold to expand options")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .foregroundStyle(CRTheme.textDim)
                     Spacer()
                 }
                 .padding(.horizontal, 4)

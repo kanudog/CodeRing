@@ -331,13 +331,16 @@ struct RadialAnchor: View {
                 .frame(width: 42, height: 42)
                 .background(Circle().fill(color))
                 .overlay(Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1))
-            // "Rhythm/Code" → two stacked lines; single words stay one line.
-            Text(label.uppercased().replacingOccurrences(of: "/", with: "\n"))
-                .font(.system(size: 8, weight: .heavy, design: .rounded))
-                .tracking(0.6)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .foregroundStyle(CRTheme.textDim)
+            // "Rhythm/Code" → two stacked lines; empty label = icon only
+            // (the shock bolt needs no caption).
+            if !label.isEmpty {
+                Text(label.uppercased().replacingOccurrences(of: "/", with: "\n"))
+                    .font(.system(size: 8, weight: .heavy, design: .rounded))
+                    .tracking(0.6)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .foregroundStyle(CRTheme.textDim)
+            }
         }
         .opacity(isActive ? 0.35 : 1)
         .position(center)

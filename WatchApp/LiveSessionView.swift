@@ -154,10 +154,9 @@ struct LiveSessionView: View {
                 medChipColumn(now: now, side: 0)
                     .padding(.top, engine.roscAchieved ? 32 : 2)
             }
-            .overlay(alignment: engine.roscAchieved ? .topTrailing : .bottomTrailing) {
+            .overlay(alignment: .topTrailing) {
                 medChipColumn(now: now, side: 1)
-                    .padding(.top, engine.roscAchieved ? 32 : 0)
-                    .padding(.bottom, engine.roscAchieved ? 0 : 8)
+                    .padding(.top, engine.roscAchieved ? 32 : 2)
             }
 
             Spacer(minLength: 48)   // anchor zone
@@ -245,11 +244,22 @@ struct LiveSessionView: View {
             keys.removeAll { $0 == victim }
         }
         let leftCount = engine.roscAchieved ? 3 : 4
-        let slots = side == 0 ? Array(keys.prefix(leftCount))
+        var slots = side == 0 ? Array(keys.prefix(leftCount))
                               : Array(keys.dropFirst(leftCount))
+        // Right column (with the shock button up top) fills BOTTOM-UP on the
+        // same row grid as the left: the 5th chip lines up with the 4th, the
+        // 6th with the 3rd — never under the shock bolt or the volume puck.
+        var leadingBlanks = 0
+        if side == 1, !engine.roscAchieved {
+            slots = slots.reversed()
+            leadingBlanks = max(0, leftCount - slots.count)
+        }
         let align: Alignment = side == 0 ? .leading : .trailing
 
-        return VStack(spacing: 4) {
+        return VStack(spacing: 0) {
+            ForEach(0..<leadingBlanks, id: \.self) { _ in
+                Color.clear.frame(height: 27)
+            }
             ForEach(slots, id: \.self) { key in
                 if let event = latest[key] {
                     VStack(spacing: 0.5) {
@@ -270,6 +280,7 @@ struct LiveSessionView: View {
                             .foregroundStyle(CRTheme.text)
                     }
                     .frame(maxWidth: .infinity, alignment: align)
+                    .frame(height: 27, alignment: .top)   // fixed row grid
                 }
             }
         }
@@ -669,7 +680,7 @@ struct LiveSessionView: View {
             if engine.cprStarted, !engine.roscAchieved {
                 RadialAnchor(id: "shock",
                              center: CGPoint(x: size.width - 23, y: size.height * 0.24),
-                             symbol: "bolt.fill", label: "Shock",
+                             symbol: "bolt.fill", label: "",
                              color: CRTheme.shock,
                              items: shockItems,
                              radius: 62, bounds: size,
@@ -753,7 +764,6 @@ struct LiveSessionView: View {
         return items.reversed()
     }
 
-    private let limbNames = ["L arm", "L leg", "R arm", "R leg"]
     private let commsServices = ["Surgery", "Anesthesia", "ECMO", "Consult"]
 
     private func tempParent() -> RadialItem {
@@ -776,16 +786,13 @@ struct LiveSessionView: View {
         items.append(RadialItem(id: "evt:rhythm", title: "Rhythm",
                                 symbol: "waveform.path.ecg", colorHex: CRTheme.rhythmHex))
 
-        // Access → IV / IO → limb (two levels deep)
-        func limbs(_ base: String) -> [RadialItem] {
-            limbNames.map { RadialItem(id: "evt:\(base)|\($0)", title: $0,
-                                       symbol: "smallcircle.filled.circle", colorHex: access) }
-        }
+        // Access → IV / IO / Art line, logged as-is: the site lives in the
+        // chart, not the watch (Sebastian: no need to track limbs here).
         items.append(RadialItem(id: "grp:access", title: "Access",
                                 symbol: "cross.circle.fill", colorHex: access, children: [
-            RadialItem(id: "grp:iv", title: "IV", symbol: "cross.vial.fill", colorHex: access, children: limbs("access.iv")),
-            RadialItem(id: "grp:io", title: "IO", symbol: "target", colorHex: access, children: limbs("access.io")),
-            RadialItem(id: "grp:art", title: "Art line", symbol: "waveform.path", colorHex: access, children: limbs("access.art"))
+            RadialItem(id: "evt:access.iv", title: "IV", symbol: "cross.vial.fill", colorHex: access),
+            RadialItem(id: "evt:access.io", title: "IO", symbol: "target", colorHex: access),
+            RadialItem(id: "evt:access.art", title: "Art line", symbol: "waveform.path", colorHex: access)
         ]))
 
         // Airway → intubation / bag / mask / trach
