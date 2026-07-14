@@ -81,7 +81,7 @@ public func crChipAbbreviation(key: String, title: String) -> String {
     // Keyed on the leading word (lowercased) so it works for drugs and events.
     let known: [String: String] = [
         "epinephrine": "EPI", "atropine": "ATRO", "adenosine": "ADEN",
-        "amiodarone": "AMIO", "lidocaine": "LIDO", "dextrose": "D25",
+        "amiodarone": "AMIO", "lidocaine": "LIDO", "dextrose": "DEX",
         "calcium": "CA", "sodium": "BICARB", "bicarb": "BICARB",
         "magnesium": "MAG", "naloxone": "NAL", "fluid": "IVF", "fluids": "IVF",
         "blood": "BLOOD", "defibrillation": "DEFIB", "cardioversion": "CVERT"

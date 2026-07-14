@@ -403,10 +403,12 @@ struct RadialMenuOverlay: View {
                         .foregroundStyle(hovered ? item.color : CRTheme.text)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
-                        .frame(maxWidth: 70)
-                        .padding(.horizontal, 3)
-                        .padding(.vertical, 1)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1.5)
                         .background(RoundedRectangle(cornerRadius: 5).fill(CRTheme.bg.opacity(0.72)))
+                        // Cap wrap width AFTER the background so the fill hugs
+                        // the glyphs instead of stretching to the cap.
+                        .frame(maxWidth: 74)
                         .position(x: min(max(p.x, 32), size.width - 32),
                                   y: max(10, p.y))
                         .allowsHitTesting(false)

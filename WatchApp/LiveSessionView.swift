@@ -234,17 +234,19 @@ struct LiveSessionView: View {
         return VStack(spacing: 4) {
             ForEach(slots, id: \.self) { key in
                 if let event = latest[key] {
-                    VStack(spacing: 1) {
-                        Text(crChipAbbreviation(key: key, title: event.title))
-                            .font(.system(size: 7, weight: .heavy, design: .rounded))
-                            .tracking(0.4)
-                            .foregroundStyle(Color(hex: event.tintHex))
-                        Text("×\(counts[key] ?? 1)")
-                            .font(.system(size: 6.5, weight: .heavy, design: .rounded).monospacedDigit())
-                            .foregroundStyle(CRTheme.text)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 0.5)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(CRTheme.surfaceHi))
+                    VStack(spacing: 0.5) {
+                        HStack(spacing: 2) {
+                            Text(crChipAbbreviation(key: key, title: event.title))
+                                .font(.system(size: 7, weight: .heavy, design: .rounded))
+                                .tracking(0.4)
+                                .foregroundStyle(Color(hex: event.tintHex))
+                            Text("×\(counts[key] ?? 1)")
+                                .font(.system(size: 6.5, weight: .heavy, design: .rounded).monospacedDigit())
+                                .foregroundStyle(CRTheme.text)
+                                .padding(.horizontal, 3)
+                                .padding(.vertical, 0.5)
+                                .background(RoundedRectangle(cornerRadius: 3.5).fill(CRTheme.surfaceHi))
+                        }
                         Text(crClock(now.timeIntervalSince(event.date)))
                             .font(.system(size: 9.5, weight: .heavy, design: .rounded).monospacedDigit())
                             .foregroundStyle(CRTheme.text)
@@ -253,7 +255,7 @@ struct LiveSessionView: View {
                 }
             }
         }
-        .frame(width: 44)
+        .frame(width: 52)
         .padding(.horizontal, 1)
     }
 

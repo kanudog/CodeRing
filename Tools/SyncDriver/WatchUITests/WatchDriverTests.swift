@@ -25,6 +25,72 @@ final class WatchDriverTests: XCTestCase {
         XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10), "weight page not shown")
     }
 
+    /// v10: PALS tile picker (tap generic / hold-refine), SKIP shortcuts,
+    /// inline ×N chips, DEX abbreviation, condensed log.
+    func testV10_pickerAndSkip() throws {
+        ring.terminate(); sleep(1); ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START'")).firstMatch.tap()
+        sleep(3)   // shot: five PALS tiles + SKIP header
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        // Tiles render in geo coords ~31 pt below the window top.
+        let inset: CGFloat = 31
+
+        // 1 — HOLD the TACHY tile (mid-left) and release on SVT: the bloom
+        // fans up-right toward open space (~(84, 77) geo).
+        at(f.width * 0.27, 124 + inset)
+            .press(forDuration: 0.5, thenDragTo: at(33, 78 + inset),
+                   withVelocity: .slow, thenHoldForDuration: 0.8)
+        XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 8),
+                      "refined pick did not reach weight page")
+        sleep(2)   // shot: weight page with SKIP beside back
+
+        // 2 — SKIP from the weight page → straight onto the timer as SVT.
+        let skip = ring.buttons["SKIP"]
+        XCTAssertTrue(skip.exists, "weight-page SKIP missing")
+        skip.tap()
+        let startCPR = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch
+        XCTAssertTrue(startCPR.waitForExistence(timeout: 8), "SKIP did not reach timer")
+        XCTAssertTrue(ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'SVT'")).firstMatch.exists,
+            "refined protocol not in header")
+        startCPR.tap()
+        sleep(1)
+
+        // 3 — Dextrose (volume root, idx 3) → DEX chip with inline ×1.
+        let sideY = f.height - 46
+        let vx = f.width * 0.85
+        at(vx, sideY).press(forDuration: 0.5, thenDragTo: at(vx - 38.5, sideY - 101),
+                            withVelocity: .slow, thenHoldForDuration: 0.6)
+        XCTAssertTrue(ring.staticTexts["DEX"].waitForExistence(timeout: 6), "DEX chip missing")
+        sleep(2)   // shot: inline ×1 beside DEX
+
+        // 4 — condensed log.
+        let topButtons = ring.buttons.allElementsBoundByIndex.filter {
+            $0.frame.minY >= 0 && $0.frame.midY < 60 && $0.isHittable
+        }
+        topButtons.min(by: { $0.frame.minX < $1.frame.minX })?.tap()   // log button (leftmost)
+        sleep(3)   // shot: dense log rows
+        ring.terminate()
+
+        // 5 — protocol-page SKIP goes straight to the timer.
+        sleep(1); ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START'")).firstMatch.tap()
+        let skip2 = ring.buttons["SKIP"]
+        XCTAssertTrue(skip2.waitForExistence(timeout: 8), "protocol-page SKIP missing")
+        skip2.tap()
+        XCTAssertTrue(ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch.waitForExistence(timeout: 8),
+            "protocol SKIP did not reach timer")
+        ring.terminate()
+    }
+
     /// v9: chips in every phase + dose badges + icon audit. Logs epi BEFORE
     /// Start CPR (chip must appear on the gate screen), then five distinct
     /// meds to fill the left column (4) and spill bottom-right, with ×2 on epi.

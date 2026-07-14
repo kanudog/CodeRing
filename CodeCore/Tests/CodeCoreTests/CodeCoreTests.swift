@@ -56,6 +56,7 @@ final class DoseCalculatorTests: XCTestCase {
         XCTAssertEqual(crChipAbbreviation(key: "x", title: "Epinephrine"), "EPI")
         XCTAssertEqual(crChipAbbreviation(key: "x", title: "Amiodarone"), "AMIO")
         XCTAssertEqual(crChipAbbreviation(key: "x", title: "Calcium"), "CA")
+        XCTAssertEqual(crChipAbbreviation(key: "x", title: "Dextrose"), "DEX")
         XCTAssertEqual(crChipAbbreviation(key: "x", title: "Bicarb"), "BICARB")
         // Unknown short word → said whole; unknown long word → first 3.
         XCTAssertEqual(crChipAbbreviation(key: "x", title: "Zeta"), "ZETA")

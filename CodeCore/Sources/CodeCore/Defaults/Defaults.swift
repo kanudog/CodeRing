@@ -287,7 +287,86 @@ public enum Defaults {
         )
     }
 
-    /// Registry read by both apps. New protocols get appended here (or loaded
-    /// from JSON later) — nothing else in the codebase changes.
-    public static var protocols: [CodeProtocolDefinition] { [palsArrest] }
+    /// A named variant of the arrest scaffolding. DEMO simplification: every
+    /// PALS algorithm currently shares the arrest timers/drugs/events — the
+    /// variant carries identity (id/name/short/symbol) so the picker, header,
+    /// and record read correctly; algorithm-specific flows come later.
+    private static func palsVariant(id: String, name: String, shortName: String,
+                                    symbol: String) -> CodeProtocolDefinition {
+        var p = palsArrest
+        p.id = id; p.name = name; p.shortName = shortName; p.symbol = symbol
+        return p
+    }
+
+    // Cardiac arrest refinements
+    public static var palsArrestShockable: CodeProtocolDefinition {
+        palsVariant(id: "pals.arrest.shockable", name: "VF / pVT",
+                    shortName: "VF/pVT", symbol: "bolt.heart.fill")
+    }
+    public static var palsArrestNonShockable: CodeProtocolDefinition {
+        palsVariant(id: "pals.arrest.nonshock", name: "PEA / Asystole",
+                    shortName: "PEA", symbol: "minus.circle.fill")
+    }
+    // Bradycardia / tachycardia (with pulse)
+    public static var palsBrady: CodeProtocolDefinition {
+        palsVariant(id: "pals.brady", name: "Bradycardia",
+                    shortName: "BRADY", symbol: "arrow.down.heart.fill")
+    }
+    public static var palsTachy: CodeProtocolDefinition {
+        palsVariant(id: "pals.tachy", name: "Tachycardia",
+                    shortName: "TACHY", symbol: "arrow.up.heart.fill")
+    }
+    public static var palsTachySVT: CodeProtocolDefinition {
+        palsVariant(id: "pals.tachy.svt", name: "SVT (narrow QRS)",
+                    shortName: "SVT", symbol: "arrow.up.heart.fill")
+    }
+    public static var palsTachyVT: CodeProtocolDefinition {
+        palsVariant(id: "pals.tachy.vt", name: "VT with pulse",
+                    shortName: "VT", symbol: "waveform.path.ecg")
+    }
+    // Respiratory
+    public static var palsResp: CodeProtocolDefinition {
+        palsVariant(id: "pals.resp", name: "Respiratory",
+                    shortName: "RESP", symbol: "lungs.fill")
+    }
+    public static var palsRespArrest: CodeProtocolDefinition {
+        palsVariant(id: "pals.resp.arrest", name: "Resp arrest",
+                    shortName: "RESP-A", symbol: "lungs.fill")
+    }
+    public static var palsRespDistress: CodeProtocolDefinition {
+        palsVariant(id: "pals.resp.distress", name: "Resp distress",
+                    shortName: "RESP-D", symbol: "wind")
+    }
+    // Shock (hypoperfusion) states
+    public static var palsShockState: CodeProtocolDefinition {
+        palsVariant(id: "pals.shockstate", name: "Shock (perfusion)",
+                    shortName: "SHOCK", symbol: "heart.circle.fill")
+    }
+    public static var palsShockHypovolemic: CodeProtocolDefinition {
+        palsVariant(id: "pals.shockstate.hypo", name: "Hypovolemic shock",
+                    shortName: "HYPOVOL", symbol: "drop.fill")
+    }
+    public static var palsShockSeptic: CodeProtocolDefinition {
+        palsVariant(id: "pals.shockstate.septic", name: "Septic shock",
+                    shortName: "SEPTIC", symbol: "microbe.fill")
+    }
+    public static var palsShockCardiogenic: CodeProtocolDefinition {
+        palsVariant(id: "pals.shockstate.cardio", name: "Cardiogenic shock",
+                    shortName: "CARDIOG", symbol: "heart.fill")
+    }
+
+    /// Top-level picker tiles (each may refine via hold on the watch).
+    public static var protocols: [CodeProtocolDefinition] {
+        [palsArrest, palsBrady, palsTachy, palsResp, palsShockState]
+    }
+
+    /// Every choosable algorithm, including hold-to-refine variants —
+    /// lookup table for pickers and the session record.
+    public static var allProtocolChoices: [CodeProtocolDefinition] {
+        [palsArrest, palsArrestShockable, palsArrestNonShockable,
+         palsBrady,
+         palsTachy, palsTachySVT, palsTachyVT,
+         palsResp, palsRespArrest, palsRespDistress,
+         palsShockState, palsShockHypovolemic, palsShockSeptic, palsShockCardiogenic]
+    }
 }

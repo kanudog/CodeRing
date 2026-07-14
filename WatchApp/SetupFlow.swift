@@ -14,6 +14,8 @@ struct SetupFlowView: View {
     private enum Step { case protocolPick, weight, confirm }
 
     private let store = CodeStore.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var setupMenu = RadialMenuModel()
     @State private var step: Step = .protocolPick
     @State private var protocolDef: CodeProtocolDefinition = Defaults.palsArrest
     @State private var weightMode: WeightSource = .manual
@@ -38,61 +40,129 @@ struct SetupFlowView: View {
             }
         }
         .background(CRTheme.bg)
-        .navigationBarBackButtonHidden(step != .protocolPick)
-        // The system title bar ate vertical space and overlapped the weight
-        // chips — everything past the first step draws its own compact header.
-        .toolbar(step == .protocolPick ? .visible : .hidden, for: .navigationBar)
+        // Every step draws its own compact header (back · title · SKIP) —
+        // the system bar ate vertical space and overlapped the chips.
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    /// Straight to the timer with whatever is already set — protocol
+    /// defaults to Cardiac Arrest, weight to the current dial value.
+    private var skipChip: some View {
+        Button {
+            WatchHaptics.play(.click)
+            launch()
+        } label: {
+            Text("SKIP")
+                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                .tracking(0.8)
+                .foregroundStyle(CRTheme.bg)
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(Capsule().fill(CRTheme.rosc))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Step 1: code type
+    // Five color-coded pucks, one per PALS family. TAP takes the generic
+    // algorithm; HOLD blooms the refined types (VF/pVT vs PEA, SVT vs VT…)
+    // through the same radial menu the live screen uses.
+
+    private struct CodeTile {
+        let proto: CodeProtocolDefinition
+        let colorHex: String
+        let refinements: [CodeProtocolDefinition]
+    }
+
+    private var codeTiles: [CodeTile] {
+        [
+            CodeTile(proto: Defaults.palsArrest, colorHex: CRTheme.medHex,
+                     refinements: [Defaults.palsArrestShockable, Defaults.palsArrestNonShockable]),
+            CodeTile(proto: Defaults.palsBrady, colorHex: CRTheme.rhythmHex,
+                     refinements: [Defaults.palsBrady]),   // no subtypes — hold echoes itself
+            CodeTile(proto: Defaults.palsTachy, colorHex: CRTheme.shockHex,
+                     refinements: [Defaults.palsTachySVT, Defaults.palsTachyVT]),
+            CodeTile(proto: Defaults.palsResp, colorHex: CRTheme.airwayHex,
+                     refinements: [Defaults.palsRespArrest, Defaults.palsRespDistress]),
+            CodeTile(proto: Defaults.palsShockState, colorHex: CRTheme.careHex,
+                     refinements: [Defaults.palsShockHypovolemic, Defaults.palsShockSeptic,
+                                   Defaults.palsShockCardiogenic])
+        ]
+    }
 
     private var protocolPage: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                eyebrow("CODE TYPE")
-                ForEach(Defaults.protocols) { proto in
-                    Button {
-                        protocolDef = proto
-                        WatchHaptics.play(.click)
-                        // Last-minute protocol change from Confirm goes
-                        // straight back — never back through weight entry.
-                        step = returnToConfirm ? .confirm : .weight
-                        returnToConfirm = false
-                    } label: {
-                        HStack {
-                            Image(systemName: proto.symbol)
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundStyle(CRTheme.med)
-                                .frame(width: 24)
-                            Text(proto.name)
-                                .font(.system(size: 15, weight: .bold, design: .rounded))
-                                .foregroundStyle(CRTheme.text)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(CRTheme.textDim)
-                        }
-                        .padding(.horizontal, 12)
-                        .frame(height: 52)
-                        .background(RoundedRectangle(cornerRadius: 14).fill(CRTheme.surface))
+        GeometryReader { geo in
+            let positions: [CGPoint] = [
+                CGPoint(x: geo.size.width * 0.27, y: 62),
+                CGPoint(x: geo.size.width * 0.73, y: 62),
+                CGPoint(x: geo.size.width * 0.27, y: 124),
+                CGPoint(x: geo.size.width * 0.73, y: 124),
+                CGPoint(x: geo.size.width * 0.5, y: 180)
+            ]
+            ZStack {
+                VStack {
+                    HStack(spacing: 4) {
+                        backChevron { dismiss() }
+                        eyebrow("CODE TYPE")
+                        Spacer()
+                        DemoBadge(compact: true)
+                        skipChip
                     }
-                    .buttonStyle(.plain)
+                    Spacer()
                 }
-                DemoBadge(compact: true)
+                .padding(.horizontal, 4)
+
+                ForEach(Array(codeTiles.enumerated()), id: \.offset) { i, tile in
+                    RadialAnchor(id: tile.proto.id,
+                                 center: positions[i],
+                                 symbol: tile.proto.symbol,
+                                 label: tile.proto.shortName,
+                                 color: Color(hex: tile.colorHex),
+                                 items: {
+                                     tile.refinements.map { r in
+                                         RadialItem(id: "proto:\(r.id)", title: r.name,
+                                                    symbol: r.symbol, colorHex: tile.colorHex)
+                                     }
+                                 },
+                                 radius: 60,
+                                 bounds: geo.size,
+                                 tapAction: { choose(tile.proto) },
+                                 model: setupMenu,
+                                 onSelect: selectProtocolItem)
+                }
+
+                RadialMenuOverlay(model: setupMenu)
             }
-            .padding(.horizontal, 4)
+            .coordinateSpace(name: "live")
         }
-        .navigationTitle("New Code")
+    }
+
+    private func choose(_ proto: CodeProtocolDefinition) {
+        protocolDef = proto
+        WatchHaptics.play(.click)
+        // Last-minute protocol change from Confirm goes straight back —
+        // never back through weight entry.
+        step = returnToConfirm ? .confirm : .weight
+        returnToConfirm = false
+    }
+
+    private func selectProtocolItem(_ item: RadialItem) {
+        guard item.id.hasPrefix("proto:") else { return }
+        let pid = String(item.id.dropFirst(6))
+        guard let proto = Defaults.allProtocolChoices.first(where: { $0.id == pid }) else { return }
+        choose(proto)
     }
 
     // MARK: - Step 2: weight
 
     private var weightPage: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 4) {
+            HStack(spacing: 3) {
                 backChevron { step = .protocolPick }
+                skipChip
                 modeChip("kg", .manual)
-                modeChip("Broselow", .broselow)
+                modeChip("Tape", .broselow)
                 modeChip("Age", .ageEstimate)
             }
 
