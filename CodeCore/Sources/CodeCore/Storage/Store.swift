@@ -46,6 +46,10 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var metronomeBPM: Int = 110
     public var metronomePitch: MetronomePitch = .medium
     public var keepScreenOn: Bool = false         // extend wake time during a live code
+    /// Radial menus open on tap and select by tapping — no hold-and-slide.
+    /// Watch-local preference (no phone editor); the watch's settings merge
+    /// preserves it across the phone's wholesale settings push.
+    public var menuTapOnly: Bool = false
     public var cycleSecondsOverride: TimeInterval? = nil   // nil = protocol default (120)
     public var epiSecondsOverride: TimeInterval? = nil     // nil = protocol default (180)
     public var defaultDrugSetID: UUID? = nil
@@ -66,6 +70,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         metronomeBPM = try c.decodeIfPresent(Int.self, forKey: .metronomeBPM) ?? 110
         metronomePitch = try c.decodeIfPresent(MetronomePitch.self, forKey: .metronomePitch) ?? .medium
         keepScreenOn = try c.decodeIfPresent(Bool.self, forKey: .keepScreenOn) ?? false
+        menuTapOnly = try c.decodeIfPresent(Bool.self, forKey: .menuTapOnly) ?? false
         cycleSecondsOverride = try c.decodeIfPresent(TimeInterval.self, forKey: .cycleSecondsOverride)
         epiSecondsOverride = try c.decodeIfPresent(TimeInterval.self, forKey: .epiSecondsOverride)
         defaultDrugSetID = try c.decodeIfPresent(UUID.self, forKey: .defaultDrugSetID)

@@ -239,6 +239,14 @@ struct WatchSettingsView: View {
                     .foregroundStyle(CRTheme.textDim)
             }
 
+            Section("Menus") {
+                Toggle("Tap-only menus", isOn: setting({ $0.menuTapOnly },
+                                                       { $0.menuTapOnly = $1 }))
+                Text("Tap a button to open its menu, then tap items to log — no hold-and-slide. The shock bolt opens its menu on tap instead of instantly logging a defib energy.")
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundStyle(CRTheme.textDim)
+            }
+
             Section("Metronome") {
                 Toggle("Sound", isOn: setting({ $0.metronomeSoundOn },
                                               { $0.metronomeSoundOn = $1 }))

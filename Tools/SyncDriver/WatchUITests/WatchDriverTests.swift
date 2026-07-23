@@ -25,6 +25,251 @@ final class WatchDriverTests: XCTestCase {
         XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10), "weight page not shown")
     }
 
+    /// v13: five auto-created timers (Sebastian's atropine/amio/blood/IVF/
+    /// defib report, 2026-07-22) — every chip must be FULLY visible, never
+    /// under the anchor pucks (bottom) or the shock bolt (right edge).
+    /// Frame assertions run LAST so the screenshot burst captures the state
+    /// either way. Run on the 45 mm Series 9 sim ONLY (editor-geo targets).
+    func testV13_fiveChipsClearOfAnchors() throws {
+        ring.terminate(); sleep(1); ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START'")).firstMatch.tap()
+        let skip = ring.buttons["SKIP"]
+        XCTAssertTrue(skip.waitForExistence(timeout: 8)); skip.tap()
+        let startCPR = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch
+        XCTAssertTrue(startCPR.waitForExistence(timeout: 8)); startCPR.tap()
+        sleep(1)
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        /// Press an anchor, drag to a target, hold, release (leaf logs).
+        func give(fromX ax: CGFloat, fromY ay: CGFloat,
+                  toX tx: CGFloat, toY ty: CGFloat, seconds: Double = 0.6) {
+            at(ax, ay).press(forDuration: 0.5, thenDragTo: at(tx, ty),
+                             withVelocity: .slow, thenHoldForDuration: seconds)
+            usleep(600_000)
+        }
+        let sideY = f.height - 36          // side pucks (caption-less, lowered)
+        let cx = f.width * 0.15, vx = f.width * 0.85
+        // Anchors are placed in GeometryReader space (194×191, top inset
+        // dy below the window top) — convert like testV12 does.
+        let dy = f.height - 191
+        let shockX = f.width - 23, shockY = 40.1 + dy   // bolt at 0.21 × geo
+
+        // Five ROOT leaves only: a motionless synthetic hold stops sending
+        // drag events, so sub-fan leaves (blood, fluid rungs, defib rungs)
+        // can't be re-hovered after a dwell-expand — the chip GRID doesn't
+        // care which items fill it, only the count and order. Cardiovert is
+        // the shock-category stand-in for a defib rung.
+        give(fromX: cx, fromY: sideY, toX: cx + 38.5, toY: sideY - 101)   // atropine
+        give(fromX: cx, fromY: sideY, toX: cx + 102, toY: sideY - 35)     // amiodarone
+        give(fromX: vx, fromY: sideY, toX: vx - 38.5, toY: sideY - 101)   // dextrose
+        give(fromX: vx, fromY: sideY, toX: vx - 78, toY: sideY - 75)      // calcium
+        give(fromX: shockX, fromY: shockY, toX: 142, toY: 147)            // cardiovert
+
+        for chip in ["ATRO", "AMIO", "DEX", "CA", "CVERT"] {
+            XCTAssertTrue(ring.staticTexts[chip].waitForExistence(timeout: 6),
+                          "\(chip) chip missing")
+        }
+        sleep(6)   // shot: all five chips, clocks running
+
+        // 6th item fits the 4+2 grid; the 7th (epi, protected) evicts the
+        // stalest chip (atropine).
+        give(fromX: vx, fromY: sideY, toX: vx - 102, toY: sideY - 35)
+        XCTAssertTrue(ring.staticTexts["BICARB"].waitForExistence(timeout: 6),
+                      "BICARB chip missing")
+        XCTAssertTrue(ring.staticTexts["ATRO"].exists, "sixth chip should not evict")
+        sleep(4)   // shot: six chips (4 + 2)
+        give(fromX: cx, fromY: sideY, toX: cx - 8, toY: sideY - 108)
+        XCTAssertTrue(ring.staticTexts["EPI"].waitForExistence(timeout: 6), "EPI chip missing")
+        XCTAssertFalse(ring.staticTexts["ATRO"].exists, "stalest chip was not evicted")
+        sleep(8)   // shot: post-eviction six chips, epi ring live
+
+        // Geometry: every chip row (abbrev text + the clock line under it)
+        // must clear the anchor pucks below and the shock bolt at top-right.
+        let puckTop = sideY - 22          // caption-less puck circle top, 1 pt margin
+        let boltBottom = shockY + 23      // bolt circle bottom edge
+        for chip in ["EPI", "AMIO", "DEX", "CA", "CVERT", "BICARB"] {
+            let fr = ring.staticTexts[chip].frame
+            XCTAssertLessThanOrEqual(fr.maxY + 13, puckTop,
+                                     "\(chip) chip row reaches into the anchor pucks")
+            if fr.midX > f.width / 2 {
+                XCTAssertGreaterThanOrEqual(fr.minY, boltBottom,
+                                            "\(chip) chip sits under the shock bolt")
+            }
+        }
+        sleep(2)
+    }
+
+    /// v14: tap-only menus (Settings → Menus). A HOLD on an anchor opens the
+    /// fan in TAP mode and releasing keeps it open; bubbles are real buttons
+    /// that log on tap. Restores the toggle afterward so hold-drag tests
+    /// keep working.
+    func testV14_tapOnlyMenus() throws {
+        func setTapOnly(_ on: Bool) {
+            ring.terminate(); sleep(1); ring.launch()
+            _ = ring.wait(for: .runningForeground, timeout: 15)
+            let settingsBtn = ring.buttons.matching(
+                NSPredicate(format: "label CONTAINS[c] 'settings'")).firstMatch
+            XCTAssertTrue(settingsBtn.waitForExistence(timeout: 10), "settings orbit missing")
+            settingsBtn.tap()
+            sleep(1)
+            // Form rows lazy-load: scroll until the toggle exists. It may
+            // surface as a switch or a generic labeled element.
+            let byLabel = NSPredicate(format: "label CONTAINS 'Tap-only'")
+            func findToggle() -> XCUIElement? {
+                let el = ring.descendants(matching: .any).matching(byLabel).firstMatch
+                return el.exists ? el : nil
+            }
+            // Full swipes overshoot the short Menus section and its rows get
+            // recycled out of the tree — creep down in half-screen drags,
+            // querying between each.
+            func nudgeUp() {
+                let a = ring.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
+                let b = ring.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.42))
+                a.press(forDuration: 0.05, thenDragTo: b, withVelocity: .slow,
+                        thenHoldForDuration: 0.25)
+            }
+            var toggle = findToggle()
+            var tries = 0
+            while toggle == nil, tries < 8 {
+                nudgeUp(); usleep(400_000)
+                toggle = findToggle(); tries += 1
+            }
+            guard let toggle else {
+                print("SETTINGS-HIERARCHY >>> \(ring.debugDescription)")
+                XCTFail("tap-only toggle missing"); return
+            }
+            // The row surfaces as a Cell with no value — the embedded Switch
+            // carries the real state. Verify every flip: a silent no-op here
+            // leaves the sim in the wrong mode for every hold-drag test.
+            func readIsOn(_ el: XCUIElement) -> Bool? {
+                let sw = el.switches.firstMatch
+                let raw = ((sw.exists ? sw.value : el.value) as? String)?.lowercased()
+                return raw.map { $0 == "1" || $0 == "on" || $0 == "true" }
+            }
+            guard let isOn = readIsOn(toggle) else {
+                XCTFail("tap-only toggle value unreadable"); return
+            }
+            if isOn != on {
+                toggle.tap(); sleep(1)
+                XCTAssertEqual(readIsOn(toggle), on, "toggle did not flip")
+            }
+        }
+        setTapOnly(true)
+
+        ring.terminate(); sleep(1); ring.launch()   // reload proves persistence
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START'")).firstMatch.tap()
+        let skip = ring.buttons["SKIP"]
+        XCTAssertTrue(skip.waitForExistence(timeout: 8)); skip.tap()
+        let startCPR = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch
+        XCTAssertTrue(startCPR.waitForExistence(timeout: 8)); startCPR.tap()
+        sleep(1)
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        let sideY = f.height - 36
+        let cx = f.width * 0.15
+        let dy = f.height - 191
+        let shockX = f.width - 23, shockY = 40.1 + dy   // bolt at 0.21 × geo
+
+        // Hold the rhythm anchor and RELEASE in place: the fan must open in
+        // tap mode and survive the release (the readout hint proves it).
+        at(cx, sideY).press(forDuration: 0.8)
+        XCTAssertTrue(ring.staticTexts["Tap to log"].waitForExistence(timeout: 4),
+                      "tap-mode fan did not open (or closed on release)")
+        sleep(2)   // shot: tap fan open, finger up
+        at(cx - 8, sideY - 108).tap()   // epi bubble is a real Button now
+        XCTAssertTrue(ring.staticTexts["EPI"].waitForExistence(timeout: 6),
+                      "tap on epi bubble did not log")
+        XCTAssertFalse(ring.staticTexts["Tap to log"].exists,
+                       "fan should close after a leaf tap")
+
+        // Shock anchor: in tap-only the fan opens instead of quick-logging;
+        // Cardiovert (fixed at geo 142,96) logs by tap.
+        at(shockX, shockY).press(forDuration: 0.8)
+        XCTAssertTrue(ring.staticTexts["Tap to log"].waitForExistence(timeout: 4),
+                      "shock fan did not open in tap mode")
+        at(142, 96 + dy).tap()
+        XCTAssertTrue(ring.staticTexts["CVERT"].waitForExistence(timeout: 6),
+                      "tap on cardiovert bubble did not log")
+        sleep(2)   // shot: EPI + CVERT chips via taps only
+
+        setTapOnly(false)
+    }
+
+    /// v15: undo-last-entry from BOTH mid-code sheets. Undoing a med drops
+    /// its chip and timer immediately; the row hides once only structural
+    /// records (CPR start etc.) remain.
+    func testV15_undoLastEntry() throws {
+        ring.terminate(); sleep(1); ring.launch()
+        _ = ring.wait(for: .runningForeground, timeout: 15)
+        ring.buttons.matching(NSPredicate(format: "label CONTAINS 'START'")).firstMatch.tap()
+        let skip = ring.buttons["SKIP"]
+        XCTAssertTrue(skip.waitForExistence(timeout: 8)); skip.tap()
+        let startCPR = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'START CPR'")).firstMatch
+        XCTAssertTrue(startCPR.waitForExistence(timeout: 8)); startCPR.tap()
+        sleep(1)
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        let sideY = f.height - 36
+        let cx = f.width * 0.15
+        func give(toX tx: CGFloat, toY ty: CGFloat) {
+            at(cx, sideY).press(forDuration: 0.5, thenDragTo: at(tx, ty),
+                                withVelocity: .slow, thenHoldForDuration: 0.6)
+            usleep(600_000)
+        }
+        give(toX: cx + 38.5, toY: sideY - 101)   // atropine
+        give(toX: cx + 102, toY: sideY - 35)     // amiodarone
+        XCTAssertTrue(ring.staticTexts["ATRO"].waitForExistence(timeout: 6))
+        XCTAssertTrue(ring.staticTexts["AMIO"].exists)
+
+        func headerButtons() -> [XCUIElement] {
+            ring.buttons.allElementsBoundByIndex.filter {
+                $0.frame.minY >= 0 && $0.frame.midY < 40 && $0.isHittable
+            }.sorted { $0.frame.minX < $1.frame.minX }
+        }
+        let undoBtn = ring.buttons.matching(
+            NSPredicate(format: "label CONTAINS 'UNDO LAST'")).firstMatch
+
+        // Timers sheet (2nd header button): undo the amio.
+        let hdr = headerButtons()
+        XCTAssertGreaterThanOrEqual(hdr.count, 2, "header buttons missing")
+        hdr[1].tap()
+        XCTAssertTrue(undoBtn.waitForExistence(timeout: 8), "undo row missing in Timers")
+        sleep(2)   // shot: undo row above the timer list
+        undoBtn.tap()
+        sleep(1)
+        ring.buttons.matching(identifier: "Close").firstMatch.tap()
+        XCTAssertFalse(ring.staticTexts["AMIO"].waitForExistence(timeout: 2),
+                       "amio chip should be gone after undo")
+        XCTAssertTrue(ring.staticTexts["ATRO"].exists, "atropine must remain")
+
+        // Log sheet (1st header button): undo the atropine there.
+        sleep(1)
+        headerButtons().first?.tap()
+        XCTAssertTrue(undoBtn.waitForExistence(timeout: 8), "undo row missing in Log")
+        undoBtn.tap()
+        sleep(1)
+        XCTAssertFalse(undoBtn.exists,
+                       "row must hide once only structural records remain")
+        ring.buttons.matching(identifier: "Close").firstMatch.tap()
+        XCTAssertFalse(ring.staticTexts["ATRO"].waitForExistence(timeout: 2),
+                       "atropine chip should be gone after undo")
+        sleep(2)
+    }
+
     /// v12: Sebastian's hand-placed fan layouts (FanLayoutOverrides).
     /// Holds each overridden fan open ~3 s for the screenshot burst.
     /// Coordinates: editor geo (198×191) → test ≈ same x, y + (frame.height

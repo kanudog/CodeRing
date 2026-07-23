@@ -23,7 +23,11 @@ struct CodeRingWatchApp: App {
                         store.replaceCustomEvents(events)
                     }
                 case .settings:
-                    if let settings = SyncDecoder.decode(AppSettings.self, from: data) {
+                    if var settings = SyncDecoder.decode(AppSettings.self, from: data) {
+                        // menuTapOnly is a watch-local interaction preference
+                        // with no phone editor — it must survive the phone's
+                        // wholesale settings push.
+                        settings.menuTapOnly = store.settings.menuTapOnly
                         store.updateSettings(settings)
                         WatchHaptics.enabled = settings.hapticsEnabled
                     }

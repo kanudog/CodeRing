@@ -59,6 +59,9 @@ final class RadialMenuModel {
 
     var isOpen = false
     var tapMode = false
+    /// When the menu opened — the anchor's TapGesture fires on release of
+    /// the very hold that opened a tap-mode fan, and must not dismiss it.
+    private var openedAt = Date.distantPast
     /// The ORIGINAL puck (cancel home at the root level).
     private(set) var rootAnchor: CGPoint = .zero
     var hoveredID: String? = nil
@@ -112,8 +115,17 @@ final class RadialMenuModel {
             }
             if let c = ov.cancel { cancelPos = clampToScreen(c) }
         }
+        self.openedAt = Date()
         self.isOpen = true
         WatchHaptics.play(.start)
+    }
+
+    /// Anchor tapped while a menu is open: dismiss — unless the menu opened
+    /// under this very touch (in tap-only mode, releasing the hold that
+    /// opened the fan also lands here as a tap).
+    func closeUnlessJustOpened() {
+        guard Date().timeIntervalSince(openedAt) > 0.6 else { return }
+        close()
     }
 
     func close() {
@@ -347,11 +359,14 @@ struct RadialAnchor: View {
     let id: String
     let center: CGPoint
     let symbol: String
-    let label: String
+    /// Caption under the puck. The LIVE screen's anchors go icon-only
+    /// (captions retired there 2026-07-23); the setup tiles still use it.
+    var label: String = ""
     let color: Color
     let items: () -> [RadialItem]
     let radius: CGFloat                    // base ring; the model grows it to fit
     let bounds: CGSize                     // screen box the arc must stay inside
+    var tapOnly: Bool = false              // settings: every entry opens a TAP fan
     var tapAction: (() -> Void)? = nil     // set → tap runs this instead of opening
     let model: RadialMenuModel
     let onSelect: (RadialItem) -> Void
@@ -366,8 +381,7 @@ struct RadialAnchor: View {
                 .frame(width: 42, height: 42)
                 .background(Circle().fill(color))
                 .overlay(Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1))
-            // "Rhythm/Code" → two stacked lines; empty label = icon only
-            // (the shock bolt needs no caption).
+            // "Post-ROSC" → two stacked lines; empty label = icon only.
             if !label.isEmpty {
                 Text(label.uppercased().replacingOccurrences(of: "/", with: "\n"))
                     .font(.system(size: 8, weight: .heavy, design: .rounded))
@@ -390,8 +404,11 @@ struct RadialAnchor: View {
             .onChanged { value in
                 switch value {
                 case .first(true):
+                    // Tap-only: the hold opens the SAME tap fan a tap would —
+                    // updateDrag/endDrag no-op in tap mode, so releasing
+                    // leaves the fan up for tapping.
                     model.open(anchor: center, radius: radius, bounds: bounds,
-                               items: items(), tapMode: false, key: id,
+                               items: items(), tapMode: tapOnly, key: id,
                                onSelect: onSelect)
                 case .second(true, let drag):
                     if let drag { model.updateDrag(drag.location) }
@@ -405,10 +422,13 @@ struct RadialAnchor: View {
     }
 
     private func handleTap() {
-        if model.isOpen { model.close(); return }
-        if let tapAction {
+        if model.isOpen { model.closeUnlessJustOpened(); return }
+        if let tapAction, !tapOnly {
             tapAction()
         } else {
+            // Tap-only also reroutes the shock bolt's quick-log tap into its
+            // menu — the instant defib log is exactly the accidental-touch
+            // hazard that mode exists to remove.
             model.open(anchor: center, radius: radius, bounds: bounds,
                        items: items(), tapMode: true, key: id,
                        onSelect: onSelect)

@@ -554,3 +554,75 @@ final class SessionEngineTests: XCTestCase {
         XCTAssertEqual(stats.pauseCount, 1)
     }
 }
+
+final class AppSettingsCodableTests: XCTestCase {
+
+    /// Settings written by older builds (fields missing from the JSON) must
+    /// load with defaults instead of failing — menuTapOnly ships after 1.0.
+    func testMissingFieldsDecodeToDefaults() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self,
+                                                from: Data("{}".utf8))
+        XCTAssertEqual(settings, AppSettings())
+        XCTAssertFalse(settings.menuTapOnly)
+    }
+
+    func testMenuTapOnlyRoundTrips() throws {
+        var settings = AppSettings()
+        settings.menuTapOnly = true
+        let decoded = try JSONDecoder().decode(AppSettings.self,
+                                               from: JSONEncoder().encode(settings))
+        XCTAssertTrue(decoded.menuTapOnly)
+    }
+}
+
+@MainActor
+final class UndoLastEntryTests: XCTestCase {
+
+    private func makeEngine(start: Date) -> SessionEngine {
+        SessionEngine(protocolDef: Defaults.palsArrest,
+                      drugSet: Defaults.palsDrugSet,
+                      eventDefs: Defaults.builtInEvents,
+                      patient: PatientContext(weightKg: 10, weightSource: .manual),
+                      startDate: start)
+    }
+
+    func testUndoRevertsIntervalAnchorAndLadder() throws {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        engine.startCPR(at: start)
+        let epi = try XCTUnwrap(Defaults.palsDrugSet.drugs.first { $0.id == Defaults.epiID })
+        let spec = try XCTUnwrap(engine.protocolDef.intervalSpecs.first)
+
+        engine.logDrug(epi, at: start.addingTimeInterval(10))
+        engine.logDrug(epi, at: start.addingTimeInterval(70))
+        XCTAssertEqual(engine.intervalRemaining(spec, at: start.addingTimeInterval(70)),
+                       spec.seconds, accuracy: 0.01)
+
+        let removed = engine.undoLastEntry()
+        XCTAssertEqual(removed?.definitionID, epi.id.uuidString)
+        // Anchor rolled back to the surviving first dose (t+10).
+        XCTAssertEqual(engine.intervalRemaining(spec, at: start.addingTimeInterval(70)),
+                       spec.seconds - 60, accuracy: 0.01)
+        XCTAssertEqual(engine.session.events.filter { $0.definitionID == epi.id.uuidString }.count, 1)
+
+        _ = engine.undoLastEntry()
+        XCTAssertFalse(engine.intervalIsRunning(spec), "no doses left — timer must go idle")
+    }
+
+    func testUndoSkipsStructuralEventsAndStopsWhenNoneLeft() throws {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let engine = makeEngine(start: start)
+        engine.startCPR(at: start)
+        let amio = try XCTUnwrap(Defaults.palsDrugSet.drugs.first { $0.id == Defaults.amioID })
+
+        engine.logDrug(amio, at: start.addingTimeInterval(5))
+        engine.beginPulseCheck(at: start.addingTimeInterval(20))   // structural, sits on top
+
+        let removed = engine.undoLastEntry()
+        XCTAssertEqual(removed?.definitionID, amio.id.uuidString,
+                       "undo must reach past the pulse-check record")
+        XCTAssertTrue(engine.session.events.contains { $0.definitionID == "pulse.check" })
+        XCTAssertTrue(engine.session.events.contains { $0.definitionID == "cpr.start" })
+        XCTAssertNil(engine.undoLastEntry(), "only structural records remain")
+    }
+}

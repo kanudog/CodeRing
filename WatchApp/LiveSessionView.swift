@@ -95,7 +95,7 @@ struct LiveSessionView: View {
             if rosc { metronome.stop() } else { startMetronomeIfNeeded() }   // re-arrest
         }
         .sheet(isPresented: $showLog) {
-            EventLogView(events: engine.session.events)
+            EventLogView(events: engine.session.events, engine: engine)
         }
         .sheet(isPresented: $showTimers) {
             TimersView(engine: engine)
@@ -146,23 +146,24 @@ struct LiveSessionView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            // Left column pins to the TOP (clear of the Rhythm/Code puck);
-            // the right column tucks into the band between the shock label
-            // and the volume anchor — or mirrors the left below RE-ARREST
-            // once ROSC hides the shock button (3 + 3).
+            // Both columns share one row grid: a 6 pt drop under the header,
+            // then four 27 pt rows that end above the lowered pucks. The
+            // right column tucks into the band between the shock bolt and
+            // the volume anchor — or mirrors the left below RE-ARREST once
+            // ROSC hides the shock button (3 + 3).
             .overlay(alignment: .topLeading) {
                 medChipColumn(now: now, side: 0)
-                    .padding(.top, engine.roscAchieved ? 32 : 2)
+                    .padding(.top, engine.roscAchieved ? 32 : 6)
             }
             .overlay(alignment: .topTrailing) {
                 medChipColumn(now: now, side: 1)
-                    .padding(.top, engine.roscAchieved ? 32 : 2)
+                    .padding(.top, engine.roscAchieved ? 32 : 6)
             }
 
             Spacer(minLength: 48)   // anchor zone
         }
         .padding(.horizontal, 6)
-        .padding(.top, 26)   // just under the corner clock's baseline
+        .padding(.top, 3)   // the control row shares the corner clock's band
         // Top-anchored: a centered column overflows both ends on the small
         // watch — empty band up top, anchors clipped below.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -187,7 +188,7 @@ struct LiveSessionView: View {
     private var startCPRBlock: some View {
         ZStack {
             RingGauge(progress: 1, color: CRTheme.cpr, lineWidth: 8, overdue: false)
-                .frame(width: 112, height: 112)
+                .frame(width: 104, height: 104)
             Button {
                 engine.startCPR()
                 WatchHaptics.play(.start)
@@ -218,7 +219,10 @@ struct LiveSessionView: View {
     /// (red rhythm meds, blue volume, red blood, amber defib) with a ×N dose
     /// count pill between the name and the clock. Slots are assigned in
     /// first-given order and never move: the left gutter takes four, the
-    /// next three sit BOTTOM-right — below the shock button, never under it.
+    /// next two sit BOTTOM-right — below the shock bolt, never under it.
+    /// Every row must stay FULLY VISIBLE: retiring the puck captions and
+    /// dropping the pucks (2026-07-23) bought the band that lets row 4
+    /// clear them — re-measure before moving pucks or rows again.
     /// A repeat dose bumps its count and resets its clock in place.
     private func medChipColumn(now: Date, side: Int) -> some View {
         let chipCats: Set<EventCategory> = [.medication, .defibrillation, .volume]
@@ -232,9 +236,10 @@ struct LiveSessionView: View {
             if let seen = latest[key], seen.date > e.date { continue }
             latest[key] = e
         }
-        // Six chips max on the main screen. Past that, the STALEST timer
-        // (oldest last dose) drops off — epinephrine never does. Everything
-        // stays in the Timers sheet regardless.
+        // Six chips max on the main screen (4 + 2 in CPR, 3 + 3 in ROSC).
+        // Past that, the STALEST timer (oldest last dose) drops off —
+        // epinephrine never does. Everything stays in the Timers sheet
+        // regardless.
         var keys = firstSeen
         let epiKey = Defaults.epiID.uuidString
         while keys.count > 6 {
@@ -246,7 +251,7 @@ struct LiveSessionView: View {
         let leftCount = engine.roscAchieved ? 3 : 4
         var slots = side == 0 ? Array(keys.prefix(leftCount))
                               : Array(keys.dropFirst(leftCount))
-        // Right column (with the shock button up top) fills BOTTOM-UP on the
+        // Right column (with the shock bolt up top) fills BOTTOM-UP on the
         // same row grid as the left: the 5th chip lines up with the 4th, the
         // 6th with the 3rd — never under the shock bolt or the volume puck.
         var leadingBlanks = 0
@@ -290,7 +295,11 @@ struct LiveSessionView: View {
 
 
     private func header(now: Date) -> some View {
-        VStack(spacing: 1) {
+        VStack(spacing: 2) {
+            // Control row rides the corner-clock band: watchOS pins its own
+            // time top-right and offers no way to hide it (both
+            // persistentSystemOverlays and toolbar-hiding were tried), so
+            // the buttons claim the dead space to its left instead.
             HStack(spacing: 3) {
                 headerButton("list.bullet", tint: CRTheme.textDim) { showLog = true }
                 headerButton("timer", tint: CRTheme.textDim) { showTimers = true }
@@ -311,34 +320,31 @@ struct LiveSessionView: View {
 
                 Spacer(minLength: 2)
 
-                // Wall clock up top (documentation time), code clock labeled
-                // under it. fixedSize keeps both on one line now the pause
-                // button shares the top row.
-                VStack(spacing: 0) {
-                    Text(Self.wallClock.string(from: now))
-                        .font(.system(size: 13, weight: .heavy, design: .rounded).monospacedDigit())
-                        .foregroundStyle(CRTheme.text)
-                    HStack(spacing: 3) {
-                        Text("TOTAL")
-                            .font(.system(size: 8, weight: .heavy, design: .rounded))
-                            .tracking(0.5)
-                            .foregroundStyle(CRTheme.textDim)
-                        Text(crClock(engine.elapsed(at: now)))
-                            .font(.system(size: 10, weight: .heavy, design: .rounded).monospacedDigit())
-                            .foregroundStyle(CRTheme.cpr)
-                    }
-                }
-                .lineLimit(1)
-                .fixedSize()
-
-                Spacer(minLength: 2)
-
                 headerButton(store.settings.metronomeSoundOn ? "speaker.wave.2.fill" : "speaker.slash.fill",
                              tint: store.settings.metronomeSoundOn ? CRTheme.cpr : CRTheme.textDim) {
                     toggleMetronomeSound()
                 }
                 headerButton("flag.fill", tint: CRTheme.med) { showEndConfirm = true }
             }
+            .padding(.trailing, 46)   // stop short of the system clock
+
+            // Documentation clocks on ONE line: wall time with seconds first
+            // (the second-less system clock above can't replace it), code
+            // clock beside it.
+            HStack(spacing: 4) {
+                Text(Self.wallClock.string(from: now))
+                    .font(.system(size: 13, weight: .heavy, design: .rounded).monospacedDigit())
+                    .foregroundStyle(CRTheme.text)
+                Text("TOTAL")
+                    .font(.system(size: 8, weight: .heavy, design: .rounded))
+                    .tracking(0.5)
+                    .foregroundStyle(CRTheme.textDim)
+                Text(crClock(engine.elapsed(at: now)))
+                    .font(.system(size: 11, weight: .heavy, design: .rounded).monospacedDigit())
+                    .foregroundStyle(CRTheme.cpr)
+            }
+            .lineLimit(1)
+            .fixedSize()
 
             HStack(spacing: 5) {
                 // Demo badge pulled from THIS screen at Sebastian's request
@@ -403,16 +409,18 @@ struct LiveSessionView: View {
             ?? epiSpec.map { Color(hex: $0.colorHex) } ?? CRTheme.med
 
         return ZStack {
+            // 104 (was 112): a touch smaller so the gutter chips sit beside
+            // the ring's stroke instead of on it.
             RingGauge(progress: max(0, cycleRem) / max(1, cycleLen),
                       color: CRTheme.cpr, lineWidth: 8, overdue: checkOverdue)
-                .frame(width: 112, height: 112)
+                .frame(width: 104, height: 104)
 
             // No countdown for a med nobody has given: the inner ring only
             // appears once the first dose starts its clock.
             if epiRunning {
                 RingGauge(progress: max(0, epiRem) / max(1, epiLen),
                           color: epiColor, lineWidth: 5, overdue: epiOverdue)
-                    .frame(width: 86, height: 86)
+                    .frame(width: 80, height: 80)
             }
 
             // The ring's center doubles as the pulse-check button once a
@@ -642,48 +650,54 @@ struct LiveSessionView: View {
     // MARK: - Anchors
 
     private func anchors(size: CGSize) -> some View {
-        // Side anchors ride higher: their two-line labels need clearance
-        // from the bottom bezel; the arcs lay themselves out (RadialMenu
-        // fits spacing/radius to the screen automatically).
-        let sideY = size.height - 46
-        let centerY = size.height - 36
+        // Icon-only pucks (captions retired, Sebastian 2026-07-23) ride low —
+        // the freed band above them is what lets four chip rows fit. Side
+        // pucks stay a touch higher than the center one for the display's
+        // corner curve; the arcs lay themselves out (RadialMenu fits
+        // spacing/radius to the screen automatically).
+        let sideY = size.height - 36
+        let centerY = size.height - 30
+        let tapOnly = store.settings.menuTapOnly
         return ZStack {
             // Rhythm / Code — RED, bottom-left. Antiarrhythmics + code meds.
             RadialAnchor(id: "code",
                          center: CGPoint(x: size.width * 0.15, y: sideY),
-                         symbol: "syringe.fill", label: "Rhythm/Code",
+                         symbol: "syringe.fill",
                          color: CRTheme.med,
                          items: rhythmCodeItems,
-                         radius: 84, bounds: size,
+                         radius: 84, bounds: size, tapOnly: tapOnly,
                          model: menu, onSelect: select)
 
             // Events — VIOLET, bottom-center.
             RadialAnchor(id: "events",
                          center: CGPoint(x: size.width * 0.5, y: centerY),
-                         symbol: "square.grid.2x2.fill", label: "Events",
+                         symbol: "square.grid.2x2.fill",
                          color: CRTheme.cpr,
                          items: eventsItems,
-                         radius: 76, bounds: size,
+                         radius: 76, bounds: size, tapOnly: tapOnly,
                          model: menu, onSelect: select)
 
             // Volume / Support — BLUE, bottom-right.
             RadialAnchor(id: "support",
                          center: CGPoint(x: size.width * 0.85, y: sideY),
-                         symbol: "drop.fill", label: "Volume/Support",
+                         symbol: "drop.fill",
                          color: CRTheme.volume,
                          items: supportItems,
-                         radius: 84, bounds: size,
+                         radius: 84, bounds: size, tapOnly: tapOnly,
                          model: menu, onSelect: select)
 
             // Shock — YELLOW, upper-right with clear air between it and the
             // ring. Tap = next defib energy; hold = Defib ladder / Cardiovert.
+            // (Tap-only mode turns the tap into the menu as well.)
+            // 0.21 tracks the ring, which rode up when the header folded
+            // into the corner-clock band — keeps the bolt clear of row 3.
             if engine.cprStarted, !engine.roscAchieved {
                 RadialAnchor(id: "shock",
-                             center: CGPoint(x: size.width - 23, y: size.height * 0.24),
-                             symbol: "bolt.fill", label: "",
+                             center: CGPoint(x: size.width - 23, y: size.height * 0.21),
+                             symbol: "bolt.fill",
                              color: CRTheme.shock,
                              items: shockItems,
-                             radius: 62, bounds: size,
+                             radius: 62, bounds: size, tapOnly: tapOnly,
                              tapAction: quickShock,
                              model: menu, onSelect: select)
             }

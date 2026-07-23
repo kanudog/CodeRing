@@ -298,6 +298,44 @@ public final class SessionEngine {
                category: .rhythm, definitionID: "rosc.vitals", at: now)
     }
 
+    // MARK: - Undo
+
+    /// Records that anchor derived clock state (cycles, pauses, weight) —
+    /// removing them would corrupt the math, so undo skips past them. A
+    /// wrong ROSC has its own escape hatch: RE-ARREST.
+    private static let structuralEventIDs: Set<String> =
+        ["pulse.check", "rosc.vitals", "patient.weight"]
+
+    /// The entry `undoLastEntry()` would remove. The sheets label their undo
+    /// button with it and hide the button when there is nothing to undo.
+    public var lastUndoableEvent: CodeEvent? {
+        session.events.last { event in
+            event.category != .cpr && event.category != .outcome &&
+            !Self.structuralEventIDs.contains(event.definitionID ?? "")
+        }
+    }
+
+    /// Removes the most recent user-logged entry — mis-taps happen mid-code.
+    /// Dose ladders, chip counts, and shock energies all re-derive from the
+    /// events list, so deleting the event reverts them; the linked drug's
+    /// interval anchor rolls back to the previous dose still on record (or
+    /// goes idle when none remains).
+    @discardableResult
+    public func undoLastEntry() -> CodeEvent? {
+        guard !isEnded, let target = lastUndoableEvent,
+              let idx = session.events.lastIndex(where: { $0.id == target.id })
+        else { return nil }
+        session.events.remove(at: idx)
+        if let defID = target.definitionID {
+            for spec in protocolDef.intervalSpecs
+            where spec.linkedDrugID?.uuidString == defID {
+                intervalAnchors[spec.id] = session.events
+                    .last { $0.definitionID == defID }?.date
+            }
+        }
+        return target
+    }
+
     @discardableResult
     public func end(at now: Date = Date()) -> CodeSession {
         guard !isEnded else { return session }
