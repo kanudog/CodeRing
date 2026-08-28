@@ -35,9 +35,6 @@ struct HandoffView: View {
                 ForEach(s.events.filter { $0.category == .access }) { access in
                     row("ACCESS", access.detail ?? access.title, CRTheme.accessHex)
                 }
-                DemoBadge(compact: true)
-                    .frame(maxWidth: .infinity)
-                    .listRowBackground(Color.clear)
             }
         }
         .navigationTitle("Handoff")

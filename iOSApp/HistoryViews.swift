@@ -157,8 +157,6 @@ struct SessionDetailView: View {
                         }
                     }
                 }
-
-                DemoBadge()
             }
             .padding()
         }

@@ -99,8 +99,6 @@ struct HomeView: View {
                 }
                 .frame(height: 172)
 
-                DemoBadge()
-                    .padding(.top, 6)
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 4)

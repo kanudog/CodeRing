@@ -16,7 +16,11 @@ struct SetupFlowView: View {
     private let store = CodeStore.shared
     @Environment(\.dismiss) private var dismiss
     @State private var setupMenu = RadialMenuModel()
-    @State private var step: Step = .protocolPick
+    /// Starts at WEIGHT, not the code-type picker (2026-08-22). You rarely
+    /// know the rhythm at t=0 and one scenario spans several types, so the
+    /// type is now a label you set when you actually know it — from Confirm
+    /// here, or from Adjust mid-code. Nothing about the timers depends on it.
+    @State private var step: Step = .weight
     @State private var protocolDef: CodeProtocolDefinition = Defaults.palsArrest
     @State private var weightMode: WeightSource = .manual
     @State private var manualKg: Double = 10
@@ -80,7 +84,7 @@ struct SetupFlowView: View {
             CodeTile(proto: Defaults.palsArrest, colorHex: CRTheme.medHex,
                      refinements: [Defaults.palsArrestShockable, Defaults.palsArrestNonShockable]),
             CodeTile(proto: Defaults.palsBrady, colorHex: CRTheme.rhythmHex,
-                     refinements: [Defaults.palsBrady]),   // no subtypes — hold echoes itself
+                     refinements: []),   // no subtypes — hold is a no-op, not a self-echo
             CodeTile(proto: Defaults.palsTachy, colorHex: CRTheme.shockHex,
                      refinements: [Defaults.palsTachySVT, Defaults.palsTachyVT]),
             CodeTile(proto: Defaults.palsResp, colorHex: CRTheme.airwayHex,
@@ -103,10 +107,12 @@ struct SetupFlowView: View {
             ZStack {
                 VStack(spacing: 2) {
                     HStack(spacing: 4) {
-                        backChevron { dismiss() }
+                        backChevron {
+                            if returnToConfirm { returnToConfirm = false; step = .confirm }
+                            else { dismiss() }
+                        }
                         eyebrow("CODE TYPE")
                         Spacer()
-                        DemoBadge(compact: true)
                         skipChip
                     }
                     Text("tap to start · hold to expand options")
@@ -162,7 +168,7 @@ struct SetupFlowView: View {
     private var weightPage: some View {
         VStack(spacing: 6) {
             HStack(spacing: 3) {
-                backChevron { step = .protocolPick }
+                backChevron { dismiss() }
                 skipChip
                 modeChip("kg", .manual)
                 modeChip("Tape", .broselow)
@@ -303,7 +309,6 @@ struct SetupFlowView: View {
                         Spacer()
                     }
                     Spacer()
-                    DemoBadge(compact: true)
                 }
                 .padding(.horizontal, 4)
 

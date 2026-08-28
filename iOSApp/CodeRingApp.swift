@@ -64,8 +64,6 @@ struct DashboardView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
-                    DemoBadge()
-
                     lastSessionCard
 
                     Button(action: sendLibrary) {

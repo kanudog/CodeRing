@@ -19,9 +19,11 @@ final class WatchDriverTests: XCTestCase {
             NSPredicate(format: "label CONTAINS 'START'")).firstMatch
         XCTAssertTrue(start.waitForExistence(timeout: 15), "home not shown")
         start.tap()
+        // 2026-08-22: START now lands straight on WEIGHT — the code-type
+        // picker moved off the startup path (Confirm/Adjust reach it). Older
+        // recordings still expect the picker, so tolerate either.
         let arrest = ring.buttons["Cardiac Arrest"]
-        XCTAssertTrue(arrest.waitForExistence(timeout: 10), "protocol page not shown")
-        arrest.tap()
+        if arrest.waitForExistence(timeout: 3) { arrest.tap() }
         XCTAssertTrue(ring.buttons["Next"].waitForExistence(timeout: 10), "weight page not shown")
     }
 
@@ -1291,6 +1293,245 @@ final class WatchDriverTests: XCTestCase {
         XCTAssertTrue(end.waitForExistence(timeout: 10), "end confirmation did not appear")
         end.tap()
         sleep(5)
+    }
+
+    /// v14 (2026-08-22): the ROOT fan must bloom into the top arc
+    /// (TopArcLayout), never into the lower-right quadrant the wearer's own
+    /// finger covers. Parks on the arc long enough for a screenshot burst.
+    ///
+    /// LIMITATION — this does NOT prove the nested case. `press(thenDragTo:)`
+    /// releases at the end, which closes the fan, and a fresh `press` starts
+    /// a new gesture rather than continuing the old one; synthetic motionless
+    /// holds also stop delivering drag deltas. Sub-fans are reachable only in
+    /// tap-only mode (`menuTapOnly`). Nested layout shares the identical
+    /// TopArcLayout call as the root, so it is correct by construction, but
+    /// verify it by hand on-device before trusting it.
+    func testWI_topArcSubFan() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10))
+        go.tap()
+        sleep(3)
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        // Events puck — WatchLayout.eventsPuck (74, 196). NOT bottom-centre
+        // any more: the 2026-08-28 layout moved all four pucks.
+        let anchor = at(74, 196)
+        // Top arc, 6 items ⇒ rows of 3. Index 1 (ACCESS, a parent) is the
+        // apex of row 0: fan-space (97, 26) + the ~51 pt GeometryReader dy.
+        let access = at(99, 77)
+        anchor.press(forDuration: 0.4, thenDragTo: access)
+        // shot: root arc up, finger parked on ACCESS
+        sleep(2)
+        // Dwell is clock-driven, so the sub-fan blooms without further deltas.
+        access.press(forDuration: 2.5)
+        // shot: ACCESS children occupying the very same arc
+        sleep(3)
+    }
+
+    /// v15 (2026-08-22): REGRESSION GUARD. The exit pads briefly carried
+    /// their tap handler AFTER `.position()`, which fills the parent — so the
+    /// pads swallowed every touch on screen and no fan item could be picked
+    /// at all. Drags a root-arc LEAF and asserts it actually reached the log.
+    func testWJ_arcLeafActuallyLogs() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10))
+        go.tap()
+        sleep(3)
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        // Events puck, bottom centre → 6-item fan. Slot 0 (RHYTHM) is a leaf:
+        // TopArcLayout row 0 left = fan-space (53, 30.7) + ~51 pt reader dy.
+        // Events puck — WatchLayout.eventsPuck (74, 196).
+        at(74, 196)
+            .press(forDuration: 0.4, thenDragTo: at(55, 84))
+        // NO sleep here: the confirmation toast lives exactly 2 s, so sleeping
+        // before the assertion raced it away and made a working app look broken.
+        let logged = ring.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] 'Rhythm'")).firstMatch
+        let missed = ring.staticTexts["Nothing logged"]
+        XCTAssertFalse(missed.exists,
+                       "released on a real leaf but the app reported nothing logged")
+        XCTAssertTrue(logged.waitForExistence(timeout: 4),
+                      "dragging onto arc slot 0 logged nothing — fan items are not selectable")
+        sleep(2)
+    }
+
+    /// v16: Sebastian's actual interaction — TAP the anchor, then TAP a
+    /// bubble. Distinct from the drag path in testWJ; the tap path was never
+    /// exercised and is the one he reports as dead.
+    func testWK_tapPathSelectsABubble() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10))
+        go.tap()
+        sleep(3)
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        at(f.width * 0.5, f.height - 40).tap()      // events puck — plain tap
+        sleep(2)
+        at(55, 84).tap()                            // slot 0 (RHYTHM) as drawn
+        let logged = ring.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] 'Rhythm'")).firstMatch
+        XCTAssertTrue(logged.waitForExistence(timeout: 4),
+                      "tapping arc slot 0 logged nothing — tap path is dead")
+        sleep(1)
+    }
+
+    /// v17: the CPR ring must not move when compressions start. Parks before
+    /// and after the START CPR tap so a screenshot burst can measure the ring's
+    /// centroid in both states.
+    func testWL_ringStaysPutOnStartCPR() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10))
+        go.tap()
+        sleep(4)
+
+        // The patient line rides the same column as the ring, and exists in
+        // both states — so its midX is a proxy for the column's placement.
+        let patient = ring.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] 'kg'")).firstMatch
+        XCTAssertTrue(patient.waitForExistence(timeout: 6), "patient line missing pre-CPR")
+        let before = patient.frame.midX
+
+        let f = ring.frame
+        ring.coordinate(withNormalizedOffset:
+            CGVector(dx: 0.5, dy: (f.height * 0.46) / f.height)).tap()
+        sleep(4)
+
+        let after = ring.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] 'kg'")).firstMatch
+        XCTAssertTrue(after.waitForExistence(timeout: 6), "patient line missing post-CPR")
+        // Was 3 pt right: the pause button appearing widened the header, and
+        // the whole column re-centred. 1 pt of slack for rounding.
+        XCTAssertEqual(after.frame.midX, before, accuracy: 1.0,
+                       "content column shifted horizontally when CPR started")
+    }
+
+    /// v18: dumps the REAL element tree with point frames, in both code
+    /// states, so a layout tool can be seeded from truth instead of from
+    /// screenshot guesswork. Not an assertion — a measurement.
+    func testWM_dumpLayoutFrames() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10))
+        go.tap()
+        sleep(3)
+        print("=====LAYOUT_DUMP_BEFORE=====")
+        print("SCREEN_FRAME \(ring.frame)")
+        print(ring.debugDescription)
+        print("=====END_BEFORE=====")
+
+        let f = ring.frame
+        ring.coordinate(withNormalizedOffset:
+            CGVector(dx: 0.5, dy: (f.height * 0.46) / f.height)).tap()
+        sleep(4)
+        print("=====LAYOUT_DUMP_DURING=====")
+        print(ring.debugDescription)
+        print("=====END_DURING=====")
+    }
+
+    /// v19: logs four different drugs, then dumps the frames of the med
+    /// timer chips they create. Chip geometry for the layout tool has to be
+    /// measured, not derived — the column packs bottom-up on the right.
+    func testWN_dumpMedChipFrames() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10)); go.tap()
+        sleep(3)
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x/f.width, dy: y/f.height))
+        }
+        at(f.width * 0.5, f.height * 0.46).tap()      // START CPR
+        sleep(3)
+
+        // Meds fan = 5 drugs ⇒ TopArcLayout rows of 3 + 2. Screen coords are
+        // geo + (2, 51): row 0 at (55,81.7) (99,77) (143,81.7),
+        //                row 1 at (77,130.2) (121,130.2).
+        let slots: [(CGFloat, CGFloat)] = [(55,81.7), (99,77), (143,81.7), (77,130.2), (121,130.2)]
+        for s in slots {
+            at(30, 210).press(forDuration: 0.4, thenDragTo: at(s.0, s.1))   // WatchLayout.medsPuck
+            sleep(2)
+        }
+        print("=====CHIPS=====")
+        print(ring.debugDescription)
+        print("=====END_CHIPS=====")
+    }
+
+    /// v20: the header controls must NOT move when compressions start.
+    /// The Pause slot is reserved at all times precisely so inserting the
+    /// button cannot re-lay the row; before that fix every other control
+    /// jumped ~3 pt sideways between states.
+    func testWO_headerControlsHoldPosition() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10)); go.tap()
+        sleep(3)
+
+        let names = ["List", "Timer", "Mute", "Flag"]
+        var before: [String: CGRect] = [:]
+        for n in names {
+            let b = ring.buttons[n]
+            XCTAssertTrue(b.waitForExistence(timeout: 6), "\(n) missing before CPR")
+            before[n] = b.frame
+        }
+
+        let f = ring.frame
+        ring.coordinate(withNormalizedOffset:
+            CGVector(dx: 0.5, dy: (f.height * 0.46) / f.height)).tap()
+        sleep(4)
+        XCTAssertTrue(ring.buttons["Pause"].waitForExistence(timeout: 6), "Pause never appeared")
+
+        for n in names {
+            let now = ring.buttons[n].frame
+            XCTAssertEqual(now.minX, before[n]!.minX, accuracy: 0.6,
+                           "\(n) moved horizontally when CPR started")
+            XCTAssertEqual(now.minY, before[n]!.minY, accuracy: 0.6,
+                           "\(n) moved vertically when CPR started")
+        }
+    }
+
+    /// v21: tapping the ring must actually START CPR. The hand-placed
+    /// layout briefly broke this — the decorative tap glyph sat on top of
+    /// the ring's button and swallowed the touch, so the screen kept saying
+    /// START CPR while the code clock ran. Assert the countdown appears.
+    func testWP_ringTapStartsCPR() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10)); go.tap()
+        sleep(3)
+
+        XCTAssertTrue(ring.staticTexts["START CPR"].waitForExistence(timeout: 6),
+                      "pre-compression centre never appeared")
+        let f = ring.frame
+        ring.coordinate(withNormalizedOffset:
+            CGVector(dx: 0.5, dy: (f.height * 0.5) / f.height)).tap()
+        sleep(3)
+
+        XCTAssertTrue(ring.staticTexts["NEXT PULSE CHECK"].waitForExistence(timeout: 6),
+                      "ring tap did not start CPR — something is covering the button")
+        XCTAssertFalse(ring.staticTexts["START CPR"].exists,
+                       "still showing START CPR after the tap")
     }
 
     /// Step B (sync verification): run a short code start→finish.

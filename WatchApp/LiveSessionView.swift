@@ -29,6 +29,8 @@ struct LiveSessionView: View {
     @State private var showHandoff = false
     @State private var showQuickEdit = false
     @State private var lastLogged: String?
+    /// Tints the toast red instead of green — a miss must not read as a win.
+    @State private var loggedWasMiss = false
 
     /// 24 h wall clock (H:mm:ss) — codes are documented in clock time.
     private static let wallClock: DateFormatter = {
@@ -38,42 +40,54 @@ struct LiveSessionView: View {
     }()
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                CRTheme.bg.ignoresSafeArea()
+        GeometryReader { full in
+            ZStack(alignment: .topLeading) {
+                CRTheme.bg
 
+                // Hand-placed chrome, in raw screen points.
                 TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
-                    mainContent(now: ctx.date)
+                    chrome(now: ctx.date)
                 }
-                // Reclaim the enormous top inset: only the corner clock lives
-                // up there, and the header row stays left/center of it.
-                .ignoresSafeArea(edges: .top)
 
-                anchors(size: geo.size)
+                // The radial layer keeps the INSET space its top-arc fans
+                // were tuned in (194 × 191 at 2, 51). Folding it into the
+                // chrome's screen space would move every fan.
+                GeometryReader { live in
+                    ZStack {
+                        anchors(size: live.size)
+                        RadialMenuOverlay(model: menu)
+                            .onChange(of: menu.missedAt) { _, new in
+                                guard new != nil else { return }
+                                flashMessage("Nothing logged", isMiss: true)
+                            }
+                    }
+                    .coordinateSpace(name: "live")
+                }
+                .padding(.horizontal, WatchLayout.liveInset.x)
+                .padding(.top, WatchLayout.liveInset.y)
 
                 if let msg = lastLogged {
                     Text(msg)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(CRTheme.rosc)
+                        .font(.system(size: WatchLayout.toast.font, weight: .bold, design: .rounded))
+                        .foregroundStyle(loggedWasMiss ? CRTheme.med : CRTheme.rosc)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 3)
                         .background(Capsule().fill(CRTheme.surfaceHi))
-                        .position(x: geo.size.width / 2, y: geo.size.height - 76)
+                        .position(WatchLayout.toast.center)
+                        .allowsHitTesting(false)
                         .transition(.opacity)
                 }
-
-                RadialMenuOverlay(model: menu)
 
                 // Modal by design: hands-off time owns the whole screen.
                 if engine.isInPulseCheck {
                     pulseCheckOverlay
                 }
             }
-            .coordinateSpace(name: "live")
+            .frame(width: full.size.width, height: full.size.height, alignment: .topLeading)
         }
-        .ignoresSafeArea(edges: .bottom)
+        .ignoresSafeArea()
         .onAppear {
             WatchHaptics.enabled = store.settings.hapticsEnabled
             // Keep-screen-awake: extended runtime session + Always-On support
@@ -116,374 +130,300 @@ struct LiveSessionView: View {
         }
     }
 
-    // MARK: - Main column
+    // MARK: - Hand-placed chrome
+    //
+    // The live screen is positioned from `WatchLayout` in SCREEN points
+    // rather than stacked. Stacking was the root of a whole family of bugs:
+    // a sibling appearing (the pause button, the drug countdown line) resized
+    // its container and silently re-centred everything around it. Sebastian
+    // placed every element by hand in the Layout Bench on 2026-08-24; these
+    // are his coordinates, and nothing may re-flow them.
 
-    private func mainContent(now: Date) -> some View {
+    private func chrome(now: Date) -> some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear.allowsHitTesting(false)
+            if engine.roscAchieved {
+                // ROSC was never laid out by hand — it keeps its own block,
+                // centred. Lay it out in the Bench before converting it.
+                roscBlock(now: now)
+                    .frame(width: WatchLayout.screen.width,
+                           height: WatchLayout.screen.height)
+            } else {
+                centreStack(now: now)
+                chipsLayer(now: now)
+            }
+            headerLayer(now: now)
+        }
+        .frame(width: WatchLayout.screen.width,
+               height: WatchLayout.screen.height, alignment: .topLeading)
+    }
+
+    // MARK: Placement helpers
+
+    /// Text inside a fixed box: it scales down to fit rather than pushing
+    /// neighbours around, which is what keeps hand-placed positions honest.
+    private func placed(_ spec: WatchLayout.Label, _ text: String,
+                        weight: Font.Weight = .heavy, mono: Bool = false,
+                        color: Color, lines: Int = 1) -> some View {
+        let base = Font.system(size: spec.font, weight: weight, design: .rounded)
+        return Text(text)
+            .font(mono ? base.monospacedDigit() : base)
+            .tracking(0.3)
+            .foregroundStyle(color)
+            .lineLimit(lines)
+            .minimumScaleFactor(0.5)
+            .multilineTextAlignment(.center)
+            .frame(width: spec.size.width, height: spec.size.height)
+            .position(spec.center)
+            // Decoration must never absorb a touch. The tap glyph sitting on
+            // top of the ring button is exactly how START CPR stopped working.
+            .allowsHitTesting(false)
+    }
+
+    private func ringView(_ spec: WatchLayout.Ring, progress: Double,
+                          color: Color, overdue: Bool) -> some View {
+        RingGauge(progress: progress, color: color,
+                  lineWidth: spec.stroke, overdue: overdue)
+            .frame(width: spec.diameter, height: spec.diameter)
+            .position(spec.center)
+            .allowsHitTesting(false)
+    }
+
+    private func discButton(_ spec: WatchLayout.Disc, symbol: String,
+                            fill: Color, tint: Color,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            ZStack {
+                Circle().fill(fill)
+                Image(systemName: symbol)
+                    .font(.system(size: spec.glyph * 0.62, weight: .bold))
+                    .foregroundStyle(tint)
+            }
+            .frame(width: spec.diameter, height: spec.diameter)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .position(spec.center)
+    }
+
+    // MARK: Centre stack
+
+    @ViewBuilder
+    private func centreStack(now: Date) -> some View {
         let cycleLen = engine.protocolDef.cycleSpec?.seconds ?? 120
         let cycleRem = engine.cycleRemaining(at: now)
-        let idx = engine.cycleIndex(at: now)
         let epiSpec = engine.protocolDef.intervalSpecs.first
         let epiLen = epiSpec?.seconds ?? 180
         let epiRunning = epiSpec.map { engine.intervalIsRunning($0) } ?? false
         let epiRem = epiSpec.map { engine.intervalRemaining($0, at: now) } ?? 0
-        let epiOverdue = epiSpec.map { engine.intervalIsOverdue($0, at: now) } ?? false
-            && !engine.roscAchieved
+        let epiOverdue = (epiSpec.map { engine.intervalIsOverdue($0, at: now) } ?? false)
+        let epiTitle = epiSpec?.title ?? "EPI"
+        let epiDrug = engine.drugSet.drugs.first { $0.id == epiSpec?.linkedDrugID }
+        let epiColor = epiDrug.map { Color(hex: $0.colorHex) }
+            ?? epiSpec.map { Color(hex: $0.colorHex) } ?? CRTheme.med
+        let overdue = cycleRem <= 0
+        let due = cycleRem <= 15 && !engine.isPaused
 
-        return VStack(spacing: 2) {
-            header(now: now)
+        ringView(WatchLayout.cprRing,
+                 progress: max(0, cycleRem) / max(1, cycleLen),
+                 color: CRTheme.cpr, overdue: overdue)
 
-            // Chips ride EVERY phase — a med given before Start CPR (or
-            // after ROSC) keeps its timer visible the moment it's logged.
-            Group {
-                if engine.roscAchieved {
-                    roscBlock(now: now)
-                } else if !engine.cprStarted {
-                    startCPRBlock
-                } else {
-                    ringStack(cycleRem: cycleRem, cycleLen: cycleLen, idx: idx,
-                              epiRem: epiRem, epiLen: epiLen, epiRunning: epiRunning,
-                              epiOverdue: epiOverdue, epiSpec: epiSpec)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            // Both columns share one row grid: a 6 pt drop under the header,
-            // then four 27 pt rows that end above the lowered pucks. The
-            // right column tucks into the band between the shock bolt and
-            // the volume anchor — or mirrors the left below RE-ARREST once
-            // ROSC hides the shock button (3 + 3).
-            .overlay(alignment: .topLeading) {
-                medChipColumn(now: now, side: 0)
-                    .padding(.top, engine.roscAchieved ? 32 : 6)
-            }
-            .overlay(alignment: .topTrailing) {
-                medChipColumn(now: now, side: 1)
-                    .padding(.top, engine.roscAchieved ? 32 : 6)
-            }
+        if epiRunning {
+            ringView(WatchLayout.drugRing,
+                     progress: max(0, epiRem) / max(1, epiLen),
+                     color: epiColor, overdue: epiOverdue)
+        }
 
-            Spacer(minLength: 48)   // anchor zone
-        }
-        .padding(.horizontal, 6)
-        .padding(.top, 3)   // the control row shares the corner clock's band
-        // Top-anchored: a centered column overflows both ends on the small
-        // watch — empty band up top, anchors clipped below.
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onChange(of: idx) { old, new in
-            // Cycle closed = the swap-compressors moment.
-            if new > old, !engine.isPaused, !engine.roscAchieved {
-                WatchHaptics.play(store.settings.hapticCycleComplete)
-            }
-        }
-        .onChange(of: cycleRem <= 0) { old, due in
-            if due, !old, engine.cprStarted, !engine.roscAchieved {
-                WatchHaptics.play(store.settings.hapticPulseCheckDue)
-            }
-        }
-        .onChange(of: epiOverdue) { old, new in
-            if new, !old { WatchHaptics.play(store.settings.hapticMedDue) }
-        }
-    }
-
-    /// Pre-compression state: the ring sits full behind one giant button.
-    /// The code clock is already running (GO); this starts the CPR cycle.
-    private var startCPRBlock: some View {
-        ZStack {
-            RingGauge(progress: 1, color: CRTheme.cpr, lineWidth: 8, overdue: false)
-                .frame(width: 104, height: 104)
-            Button {
+        // One target filling the ring. Before compressions it starts CPR;
+        // once running it is the pulse-check button (guarded, so an early
+        // tap does nothing rather than skipping the cycle).
+        Button {
+            if engine.cprStarted {
+                guard due || overdue else { return }
+                engine.beginPulseCheck()
+                WatchHaptics.play(.notification)
+            } else {
                 engine.startCPR()
                 WatchHaptics.play(.start)
                 startMetronomeIfNeeded()
                 flashLast()
-            } label: {
-                VStack(spacing: 1) {
-                    Image(systemName: "hand.tap.fill")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(CRTheme.cpr)
-                    Text("START CPR")
-                        .font(.system(size: 15, weight: .heavy, design: .rounded))
-                        .tracking(0.8)
-                        .foregroundStyle(CRTheme.text)
-                    Text("when compressions begin")
-                        .font(.system(size: 7.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(CRTheme.textDim)
-                }
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .frame(width: 92)
             }
-            .buttonStyle(.plain)
+        } label: {
+            Circle().fill(Color.clear).contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .frame(width: WatchLayout.cprRing.diameter, height: WatchLayout.cprRing.diameter)
+        .position(WatchLayout.cprRing.center)
+
+        if engine.cprStarted {
+            placed(WatchLayout.pulseLabel, "NEXT PULSE CHECK",
+                   color: overdue ? CRTheme.med : CRTheme.cpr)
+            placed(WatchLayout.countdown, crClockSigned(cycleRem), mono: true,
+                   color: overdue ? CRTheme.med
+                                  : (engine.isPaused ? CRTheme.textDim : CRTheme.text))
+            if epiRunning {
+                placed(WatchLayout.drugLine,
+                       epiOverdue ? "\(epiTitle) DUE" : "\(epiTitle) \(crClock(max(0, epiRem)))",
+                       weight: .bold, mono: true,
+                       color: epiOverdue ? CRTheme.med : epiColor)
+            }
+            if engine.isPaused {
+                // Dead centre of the ring (Sebastian, 2026-08-24) — it used
+                // to sit wherever the stack happened to put it.
+                Text("PAUSED")
+                    .font(.system(size: WatchLayout.pausedText.font, weight: .heavy, design: .rounded))
+                    .tracking(1.5)
+                    .foregroundStyle(CRTheme.bg)
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(Capsule().fill(CRTheme.shock))
+                    .position(WatchLayout.pausedText.center)
+                    .allowsHitTesting(false)
+            }
+        } else {
+            Image(systemName: "hand.tap.fill")
+                .font(.system(size: WatchLayout.tapGlyph.glyph, weight: .bold))
+                .foregroundStyle(CRTheme.cpr)
+                .position(WatchLayout.tapGlyph.center)
+                .allowsHitTesting(false)
+            placed(WatchLayout.startText, "START CPR", color: CRTheme.text)
         }
     }
 
-    /// Since-given chips for meds / fluids / shocks, each in ITS OWN color
-    /// (red rhythm meds, blue volume, red blood, amber defib) with a ×N dose
-    /// count pill between the name and the clock. Slots are assigned in
-    /// first-given order and never move: the left gutter takes four, the
-    /// next two sit BOTTOM-right — below the shock bolt, never under it.
-    /// Every row must stay FULLY VISIBLE: retiring the puck captions and
-    /// dropping the pucks (2026-07-23) bought the band that lets row 4
-    /// clear them — re-measure before moving pucks or rows again.
-    /// A repeat dose bumps its count and resets its clock in place.
-    private func medChipColumn(now: Date, side: Int) -> some View {
-        let chipCats: Set<EventCategory> = [.medication, .defibrillation, .volume]
+    // MARK: Med timer chips
+
+    /// Drugs/fluids/shocks that have been given, newest-first per key, capped
+    /// at the number of hand-placed chip slots. The STALEST timer drops off
+    /// when there are more; epinephrine never does. Everything stays in the
+    /// Timers sheet regardless.
+    private func chipSlots() -> [(key: String, event: CodeEvent, count: Int)] {
+        let cats: Set<EventCategory> = [.medication, .defibrillation, .volume]
         var firstSeen: [String] = []
         var latest: [String: CodeEvent] = [:]
         var counts: [String: Int] = [:]
-        for e in engine.session.events where chipCats.contains(e.category) {
+        for e in engine.session.events where cats.contains(e.category) {
             guard let key = e.definitionID else { continue }
             if !firstSeen.contains(key) { firstSeen.append(key) }
             counts[key, default: 0] += 1
             if let seen = latest[key], seen.date > e.date { continue }
             latest[key] = e
         }
-        // Six chips max on the main screen (4 + 2 in CPR, 3 + 3 in ROSC).
-        // Past that, the STALEST timer (oldest last dose) drops off —
-        // epinephrine never does. Everything stays in the Timers sheet
-        // regardless.
         var keys = firstSeen
         let epiKey = Defaults.epiID.uuidString
-        while keys.count > 6 {
+        while keys.count > WatchLayout.chips.count {
             guard let victim = keys.filter({ $0 != epiKey }).min(by: {
                 (latest[$0]?.date ?? .distantPast) < (latest[$1]?.date ?? .distantPast)
             }) else { break }
             keys.removeAll { $0 == victim }
         }
-        let leftCount = engine.roscAchieved ? 3 : 4
-        var slots = side == 0 ? Array(keys.prefix(leftCount))
-                              : Array(keys.dropFirst(leftCount))
-        // Right column (with the shock bolt up top) fills BOTTOM-UP on the
-        // same row grid as the left: the 5th chip lines up with the 4th, the
-        // 6th with the 3rd — never under the shock bolt or the volume puck.
-        var leadingBlanks = 0
-        if side == 1, !engine.roscAchieved {
-            slots = slots.reversed()
-            leadingBlanks = max(0, leftCount - slots.count)
+        return keys.compactMap { k in
+            latest[k].map { (key: k, event: $0, count: counts[k] ?? 1) }
         }
-        let align: Alignment = side == 0 ? .leading : .trailing
-
-        return VStack(spacing: 0) {
-            ForEach(0..<leadingBlanks, id: \.self) { _ in
-                Color.clear.frame(height: 27)
-            }
-            ForEach(slots, id: \.self) { key in
-                if let event = latest[key] {
-                    VStack(spacing: 0.5) {
-                        HStack(spacing: 2) {
-                            Text(crChipAbbreviation(key: key, title: event.title))
-                                .font(.system(size: 7, weight: .heavy, design: .rounded))
-                                .tracking(0.4)
-                                .foregroundStyle(Color(hex: event.tintHex))
-                            Text("×\(counts[key] ?? 1)")
-                                .font(.system(size: 6.5, weight: .heavy, design: .rounded).monospacedDigit())
-                                .foregroundStyle(CRTheme.text)
-                                .padding(.horizontal, 3)
-                                .padding(.vertical, 0.5)
-                                .background(RoundedRectangle(cornerRadius: 3.5).fill(CRTheme.surfaceHi))
-                        }
-                        Text(crClock(now.timeIntervalSince(event.date)))
-                            .font(.system(size: 9.5, weight: .heavy, design: .rounded).monospacedDigit())
-                            .foregroundStyle(CRTheme.text)
-                    }
-                    .frame(maxWidth: .infinity, alignment: align)
-                    .frame(height: 27, alignment: .top)   // fixed row grid
-                }
-            }
-        }
-        .frame(width: 52)
-        .padding(.horizontal, 1)
     }
 
-
-    private func header(now: Date) -> some View {
-        VStack(spacing: 2) {
-            // Control row rides the corner-clock band: watchOS pins its own
-            // time top-right and offers no way to hide it (both
-            // persistentSystemOverlays and toolbar-hiding were tried), so
-            // the buttons claim the dead space to its left instead.
-            HStack(spacing: 3) {
-                headerButton("list.bullet", tint: CRTheme.textDim) { showLog = true }
-                headerButton("timer", tint: CRTheme.textDim) { showTimers = true }
-                // Manual pause/resume lives here now — filled violet so it
-                // reads as a primary control, green while paused (= resume).
-                if engine.cprStarted, !engine.roscAchieved {
-                    Button {
-                        engine.togglePause(); flashLast()
-                    } label: {
-                        Image(systemName: engine.isPaused ? "play.fill" : "pause.fill")
-                            .font(.system(size: 9, weight: .black))
-                            .foregroundStyle(CRTheme.bg)
-                            .frame(width: 19, height: 19)
-                            .background(Circle().fill(engine.isPaused ? CRTheme.rosc : CRTheme.cpr))
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Spacer(minLength: 2)
-
-                headerButton(store.settings.metronomeSoundOn ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                             tint: store.settings.metronomeSoundOn ? CRTheme.cpr : CRTheme.textDim) {
-                    toggleMetronomeSound()
-                }
-                headerButton("flag.fill", tint: CRTheme.med) { showEndConfirm = true }
+    private func chipsLayer(now: Date) -> some View {
+        let slots = chipSlots()
+        return ForEach(Array(slots.enumerated()), id: \.element.key) { i, slot in
+            if i < WatchLayout.chips.count {
+                chipView(WatchLayout.chips[i], slot: slot, now: now)
             }
-            .padding(.trailing, 46)   // stop short of the system clock
+        }
+    }
 
-            // Documentation clocks on ONE line: wall time with seconds first
-            // (the second-less system clock above can't replace it), code
-            // clock beside it.
-            HStack(spacing: 4) {
-                Text(Self.wallClock.string(from: now))
-                    .font(.system(size: 13, weight: .heavy, design: .rounded).monospacedDigit())
+    private func chipView(_ spec: WatchLayout.Chip,
+                          slot: (key: String, event: CodeEvent, count: Int),
+                          now: Date) -> some View {
+        VStack(alignment: spec.trailing ? .trailing : .leading, spacing: 0.5) {
+            HStack(spacing: 2) {
+                Text(crChipAbbreviation(key: slot.key, title: slot.event.title))
+                    .font(.system(size: spec.nameFont, weight: .heavy, design: .rounded))
+                    .tracking(0.4)
+                    .foregroundStyle(Color(hex: slot.event.tintHex))
+                Text("×\(slot.count)")
+                    .font(.system(size: WatchLayout.chipCountFont, weight: .heavy, design: .rounded).monospacedDigit())
                     .foregroundStyle(CRTheme.text)
-                Text("TOTAL")
-                    .font(.system(size: 8, weight: .heavy, design: .rounded))
-                    .tracking(0.5)
-                    .foregroundStyle(CRTheme.textDim)
-                Text(crClock(engine.elapsed(at: now)))
-                    .font(.system(size: 11, weight: .heavy, design: .rounded).monospacedDigit())
-                    .foregroundStyle(CRTheme.cpr)
+                    .padding(.horizontal, 3).padding(.vertical, 0.5)
+                    .background(RoundedRectangle(cornerRadius: 3.5).fill(CRTheme.surfaceHi))
             }
-            .lineLimit(1)
-            .fixedSize()
-
-            HStack(spacing: 5) {
-                // Demo badge pulled from THIS screen at Sebastian's request
-                // ("for now", 2026-07-10) — every other screen and the PDF
-                // keep it. Cycle count took its slot.
-                Text("CYCLE \(engine.cycleIndex(at: now) + 1)")
-                    .font(.system(size: 9, weight: .heavy, design: .rounded).monospacedDigit())
-                    .tracking(0.5)
-                    .foregroundStyle(CRTheme.bg)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1.5)
-                    .background(Capsule().fill(CRTheme.cpr))
-                // Tappable: mid-code weight (and protocol, once more exist)
-                // corrections without leaving the timer screen.
-                Button { showQuickEdit = true } label: {
-                    HStack(spacing: 3) {
-                        Text(patientLine)
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundStyle(CRTheme.textDim)
-                        Image(systemName: "pencil.circle.fill")
-                            .font(.system(size: 9))
-                            .foregroundStyle(CRTheme.textDim.opacity(0.7))
-                    }
-                }
-                .buttonStyle(.plain)
-            }
+            Text(crClock(now.timeIntervalSince(slot.event.date)))
+                .font(.system(size: WatchLayout.chipTimerFont, weight: .heavy, design: .rounded).monospacedDigit())
+                .foregroundStyle(CRTheme.text)
         }
+        .frame(width: spec.size.width, height: spec.size.height,
+               alignment: spec.trailing ? .topTrailing : .topLeading)
+        .position(x: spec.origin.x + spec.size.width / 2,
+                  y: spec.origin.y + spec.size.height / 2)
+        .allowsHitTesting(false)
     }
 
-    private func headerButton(_ symbol: String, tint: Color,
-                              action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(tint)
-                .frame(width: 19, height: 19)
-                .background(Circle().fill(CRTheme.surface))
+    // MARK: Header controls and clocks
+
+    @ViewBuilder
+    private func headerLayer(now: Date) -> some View {
+        discButton(WatchLayout.logButton, symbol: "list.bullet",
+                   fill: CRTheme.surface, tint: CRTheme.textDim) { showLog = true }
+        discButton(WatchLayout.timersButton, symbol: "timer",
+                   fill: CRTheme.surface, tint: CRTheme.textDim) { showTimers = true }
+        discButton(WatchLayout.muteButton,
+                   symbol: store.settings.metronomeSoundOn ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                   fill: CRTheme.surface,
+                   tint: store.settings.metronomeSoundOn ? CRTheme.cpr : CRTheme.textDim) {
+            toggleMetronomeSound()
+        }
+        discButton(WatchLayout.flagButton, symbol: "flag.fill",
+                   fill: CRTheme.surface, tint: CRTheme.med) { showEndConfirm = true }
+
+        if engine.cprStarted, !engine.roscAchieved {
+            discButton(WatchLayout.pauseButton,
+                       symbol: engine.isPaused ? "play.fill" : "pause.fill",
+                       fill: engine.isPaused ? CRTheme.rosc : CRTheme.pause,
+                       tint: CRTheme.bg) { engine.togglePause(); flashLast() }
+        }
+
+        placed(WatchLayout.totalLabel, "TOTAL", color: CRTheme.textDim)
+        placed(WatchLayout.codeClock, crClock(engine.elapsed(at: now)),
+               mono: true, color: CRTheme.cpr)
+
+        if !engine.roscAchieved {
+            Text("CYCLE \(engine.cycleIndex(at: now) + 1)")
+                .font(.system(size: WatchLayout.cycleChip.font, weight: .heavy, design: .rounded).monospacedDigit())
+                .tracking(0.5)
+                .foregroundStyle(CRTheme.bg)
+                .padding(.horizontal, 6).padding(.vertical, 1.5)
+                .background(Capsule().fill(CRTheme.cpr))
+                .position(WatchLayout.cycleChip.center)
+                .allowsHitTesting(false)
+        }
+
+        // Patient strip. Text and pencil are ONE centred row: placing the
+        // pencil at a fixed x made it drift away from text of a different
+        // width (a 3-digit weight, an age suffix).
+        Button { showQuickEdit = true } label: {
+            HStack(spacing: 4) {
+                Text(patientLine)
+                    .font(.system(size: WatchLayout.patient.font, weight: .bold, design: .rounded))
+                    .foregroundStyle(CRTheme.textDim)
+                    .lineLimit(1).minimumScaleFactor(0.6)
+                Image(systemName: "pencil.circle.fill")
+                    .font(.system(size: WatchLayout.editPencilGlyph, weight: .semibold))
+                    .foregroundStyle(CRTheme.textDim.opacity(0.7))
+            }
+            .frame(width: WatchLayout.patient.size.width,
+                   height: WatchLayout.patient.size.height)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .position(WatchLayout.patient.center)
     }
 
     /// Protocol · weight · age — everything the quick-edit sheet can touch.
     private var patientLine: String {
         var line = "\(engine.protocolDef.shortName) · \(engine.session.patient.weightLabel)"
         if let m = engine.session.patient.ageMonths {
-            line += m < 24 ? " · \(m)mo" : " · \(m / 12)y"
+            line += " · \(m < 24 ? "\(m) mo" : "\(m / 12) y")"
         }
         return line
     }
 
-    private func ringStack(cycleRem: TimeInterval, cycleLen: TimeInterval, idx: Int,
-                           epiRem: TimeInterval, epiLen: TimeInterval,
-                           epiRunning: Bool, epiOverdue: Bool,
-                           epiSpec: TimerSpec?) -> some View {
-        let checkOverdue = cycleRem <= 0
-        let checkDue = cycleRem <= 15 && !engine.isPaused && !engine.roscAchieved
-        let epiTitle = epiSpec?.title ?? "EPI"
-        // Inner ring wears the linked DRUG's color (phone-editable), so the
-        // ring, its countdown text, and the med chips all match.
-        let epiDrug = engine.drugSet.drugs.first { $0.id == epiSpec?.linkedDrugID }
-        let epiColor = epiDrug.map { Color(hex: $0.colorHex) }
-            ?? epiSpec.map { Color(hex: $0.colorHex) } ?? CRTheme.med
-
-        return ZStack {
-            // 104 (was 112): a touch smaller so the gutter chips sit beside
-            // the ring's stroke instead of on it.
-            RingGauge(progress: max(0, cycleRem) / max(1, cycleLen),
-                      color: CRTheme.cpr, lineWidth: 8, overdue: checkOverdue)
-                .frame(width: 104, height: 104)
-
-            // No countdown for a med nobody has given: the inner ring only
-            // appears once the first dose starts its clock.
-            if epiRunning {
-                RingGauge(progress: max(0, epiRem) / max(1, epiLen),
-                          color: epiColor, lineWidth: 5, overdue: epiOverdue)
-                    .frame(width: 80, height: 80)
-            }
-
-            // The ring's center doubles as the pulse-check button once a
-            // check is due — a huge target well clear of the anchors' touch
-            // zones at the bottom (their gesture owns anything down there).
-            Button {
-                guard checkDue else { return }
-                engine.beginPulseCheck()
-                WatchHaptics.play(.notification)
-            } label: {
-                VStack(spacing: 0) {
-                    // Two short lines so the label never crosses the rings.
-                    Text("NEXT PULSE CHECK")
-                        .font(.system(size: 8, weight: .heavy, design: .rounded))
-                        .tracking(0.5)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                        .frame(width: 64)
-                        .foregroundStyle(checkOverdue ? CRTheme.med : CRTheme.cpr)
-                    Text(crClockSigned(cycleRem))
-                        .font(.system(size: 25, weight: .heavy, design: .rounded).monospacedDigit())
-                        .foregroundStyle(checkOverdue ? CRTheme.med
-                                         : (engine.isPaused ? CRTheme.textDim : CRTheme.text))
-                    // Nothing epi-related shows until the first dose is real.
-                    if epiRunning {
-                        Text(epiOverdue ? "\(epiTitle) DUE" : "\(epiTitle) \(crClock(max(0, epiRem)))")
-                            .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
-                            .foregroundStyle(epiOverdue ? CRTheme.med : epiColor)
-                    }
-                    if checkDue {
-                        Text("TAP — PULSE CHECK")
-                            .font(.system(size: 8.5, weight: .heavy, design: .rounded))
-                            .tracking(0.4)
-                            .foregroundStyle(CRTheme.bg)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(checkOverdue ? CRTheme.med : CRTheme.cpr))
-                            .padding(.top, 2)
-                    }
-                }
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .frame(width: 92)
-            }
-            .buttonStyle(.plain)
-            // no .disabled here — it grays the countdown; the action guards
-            .opacity(engine.isPaused ? 0.45 : 1)
-
-            if engine.isPaused {
-                Text("PAUSED")
-                    .font(.system(size: 15, weight: .heavy, design: .rounded))
-                    .tracking(1.5)
-                    .foregroundStyle(CRTheme.bg)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(CRTheme.shock))
-            }
-        }
-        .opacity(engine.isPaused ? 0.85 : 1)
-    }
-
-    /// Full-screen hands-off mode: a fresh check clock that goes red past the
-    /// 10-second target, and the only two exits a pulse check has.
     private var pulseCheckOverlay: some View {
         ZStack {
             CRTheme.bg.ignoresSafeArea()   // fully opaque — nothing competes
@@ -655,13 +595,18 @@ struct LiveSessionView: View {
         // pucks stay a touch higher than the center one for the display's
         // corner curve; the arcs lay themselves out (RadialMenu fits
         // spacing/radius to the screen automatically).
-        let sideY = size.height - 36
-        let centerY = size.height - 30
+        // Puck centres are hand-placed (WatchLayout, screen points) and
+        // converted into this inset layer. `size` is no longer consulted —
+        // these are absolute positions Sebastian chose, not proportions.
+        let meds   = WatchLayout.toLive(WatchLayout.medsPuck.center)
+        let events = WatchLayout.toLive(WatchLayout.eventsPuck.center)
+        let fluids = WatchLayout.toLive(WatchLayout.fluidsPuck.center)
+        let shock  = WatchLayout.toLive(WatchLayout.shockPuck.center)
         let tapOnly = store.settings.menuTapOnly
         return ZStack {
             // Rhythm / Code — RED, bottom-left. Antiarrhythmics + code meds.
             RadialAnchor(id: "code",
-                         center: CGPoint(x: size.width * 0.15, y: sideY),
+                         center: meds,
                          symbol: "syringe.fill",
                          color: CRTheme.med,
                          items: rhythmCodeItems,
@@ -670,7 +615,7 @@ struct LiveSessionView: View {
 
             // Events — VIOLET, bottom-center.
             RadialAnchor(id: "events",
-                         center: CGPoint(x: size.width * 0.5, y: centerY),
+                         center: events,
                          symbol: "square.grid.2x2.fill",
                          color: CRTheme.cpr,
                          items: eventsItems,
@@ -679,21 +624,23 @@ struct LiveSessionView: View {
 
             // Volume / Support — BLUE, bottom-right.
             RadialAnchor(id: "support",
-                         center: CGPoint(x: size.width * 0.85, y: sideY),
+                         center: fluids,
                          symbol: "drop.fill",
                          color: CRTheme.volume,
                          items: supportItems,
                          radius: 84, bounds: size, tapOnly: tapOnly,
                          model: menu, onSelect: select)
 
-            // Shock — YELLOW, upper-right with clear air between it and the
-            // ring. Tap = next defib energy; hold = Defib ladder / Cardiovert.
-            // (Tap-only mode turns the tap into the menu as well.)
-            // 0.21 tracks the ring, which rode up when the header folded
-            // into the corner-clock band — keeps the bolt clear of row 3.
-            if engine.cprStarted, !engine.roscAchieved {
+            // Shock — AMBER. Tap = next defib energy; hold = Defib ladder /
+            // Cardiovert. (Tap-only mode turns the tap into the menu too.)
+            //
+            // Present in EVERY pre-ROSC state, including before compressions
+            // start (Sebastian, 2026-08-28): defibrillation can precede CPR,
+            // and `quickShock` only logs an event — it has no dependency on
+            // the cycle having started.
+            if !engine.roscAchieved {
                 RadialAnchor(id: "shock",
-                             center: CGPoint(x: size.width - 23, y: size.height * 0.21),
+                             center: shock,
                              symbol: "bolt.fill",
                              color: CRTheme.shock,
                              items: shockItems,
@@ -923,9 +870,17 @@ struct LiveSessionView: View {
         let text = engine.session.events.last.map { ev in
             ev.detail.map { "\(ev.title) — \($0)" } ?? ev.title
         } ?? "Logged"
+        flashMessage(text, isMiss: false)
+    }
+
+    /// One confirmation path for every outcome: what landed in the timeline,
+    /// or that nothing did. 2 s — long enough to read mid-code without
+    /// covering the chips for the next action.
+    private func flashMessage(_ text: String, isMiss: Bool) {
+        loggedWasMiss = isMiss
         withAnimation { lastLogged = text }
         Task {
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             withAnimation { if lastLogged == text { lastLogged = nil } }
         }
     }
@@ -983,18 +938,28 @@ private struct QuickEditSheet: View {
             .listRowBackground(RoundedRectangle(cornerRadius: 10).fill(CRTheme.surface))
 
             Section {
-                ForEach(Defaults.protocols) { proto in
-                    HStack {
-                        Text(proto.name)
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(CRTheme.text)
-                        Spacer()
-                        if proto.id == engine.protocolDef.id {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 11, weight: .heavy))
-                                .foregroundStyle(CRTheme.rosc)
+                // Every choosable variant, not just the five families — this
+                // is now the primary place the code type gets set, so the
+                // refinements have to be reachable here.
+                ForEach(Defaults.allProtocolChoices) { proto in
+                    Button {
+                        engine.changeProtocol(proto)
+                        WatchHaptics.play(.click)
+                        onChanged()
+                    } label: {
+                        HStack {
+                            Text(proto.name)
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(CRTheme.text)
+                            Spacer()
+                            if proto.id == engine.protocolDef.id {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 11, weight: .heavy))
+                                    .foregroundStyle(CRTheme.rosc)
+                            }
                         }
                     }
+                    .buttonStyle(.plain)
                     .listRowBackground(RoundedRectangle(cornerRadius: 10).fill(CRTheme.surface))
                 }
             } header: {
@@ -1003,7 +968,7 @@ private struct QuickEditSheet: View {
                     .tracking(0.6)
                     .foregroundStyle(CRTheme.med)
             } footer: {
-                Text("Doses and shock energies follow the weight instantly. More algorithms coming — switching mid-code will land here.")
+                Text("Sets the label on this code and in History. Doses and shock energies follow the weight instantly; every PALS variant shares one timer set, so switching mid-code disturbs nothing.")
                     .font(.system(size: 10, design: .rounded))
                     .foregroundStyle(CRTheme.textDim)
             }

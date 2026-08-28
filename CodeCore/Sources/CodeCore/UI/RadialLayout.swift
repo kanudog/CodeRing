@@ -267,3 +267,90 @@ public enum FanLayoutOverrides {
                              cancel: CGPoint(x: 54, y: 122))
     ]
 }
+
+// MARK: - Canonical top-arc fan layout (Sebastian, 2026-08-22)
+
+/// EVERY fan — root or nested — blooms into the same shallow arc across the
+/// top of the live screen. Fixed geometry is the whole point: the wearer
+/// builds muscle memory for "second slot from the left" no matter which
+/// anchor they held, and nothing ever opens under the finger. (Left wrist,
+/// right index finger ⇒ the lower-right quadrant is permanently occluded,
+/// which is where the old per-fan hand-placed layouts kept putting leaves.)
+///
+/// Replaces `FanLayoutOverrides` as the live layout source. That table is
+/// kept only as the record of the 2026-07 hand placement.
+public enum TopArcLayout {
+
+    /// Bubble Ø38 + 6 pt of air. Also the minimum comfortable touch pitch.
+    public static let slotPitch: CGFloat = 44
+    /// First row's center y, in fan space (the live GeometryReader).
+    public static let apexY: CGFloat = 26
+    /// Second row sits a full label-height below the first.
+    public static let rowGap: CGFloat = 52
+    /// The arc's ends drop this far below its center — the "slight curve".
+    public static let arcDrop: CGFloat = 13
+    /// Bubble centers never come closer than this to a side edge.
+    public static let sideInset: CGFloat = 24
+    /// Above this count a fan needs a second row.
+    public static let maxPerRow = 4
+    /// Labels always hang directly below their own bubble.
+    public static let labelDrop: CGFloat = 25
+
+    /// How many items ride the top row: balanced across two rows so neither
+    /// looks stranded (6 → 3+3, 5 → 3+2).
+    public static func topRowCount(_ count: Int) -> Int {
+        count <= maxPerRow ? count : Int(ceil(Double(count) / 2))
+    }
+
+    /// Bubble centers for `count` items, in fan-space points, index order
+    /// left-to-right then top-to-bottom.
+    public static func positions(count: Int, bounds: CGSize) -> [CGPoint] {
+        guard count > 0 else { return [] }
+        let centerX = bounds.width / 2
+        let halfSpan = max(1, bounds.width / 2 - sideInset)
+
+        func row(_ n: Int, y: CGFloat) -> [CGPoint] {
+            guard n > 0 else { return [] }
+            // Fixed pitch, centered — NOT stretched to the full width, so a
+            // 2-item fan and a 4-item fan share the same slot spacing.
+            let pitch = min(slotPitch, (bounds.width - 2 * sideInset) / CGFloat(max(1, n - 1)))
+            let startX = centerX - pitch * CGFloat(n - 1) / 2
+            return (0..<n).map { i in
+                let x = startX + pitch * CGFloat(i)
+                let t = (x - centerX) / halfSpan          // −1…1
+                return CGPoint(x: x, y: y + arcDrop * t * t)
+            }
+        }
+
+        let top = topRowCount(count)
+        return row(top, y: apexY) + row(count - top, y: apexY + rowGap)
+    }
+
+    /// Label center for the bubble at `p` — always straight below it, so a
+    /// label can never cover a neighbouring bubble in a fixed arc.
+    public static func labelPosition(for p: CGPoint) -> CGPoint {
+        CGPoint(x: p.x, y: p.y + labelDrop)
+    }
+
+    // The three anchor pucks sit along the bottom at roughly x = 0.15w,
+    // 0.5w and 0.85w. The exit pads drop into the GAPS between them rather
+    // than on top of one — stacking ✕ over the meds puck made the two read
+    // as one control.
+    // Exit pads flank the arc on the SIDE band. The bottom is unusable: the
+    // three Ø42 anchor pucks leave only ~34 pt of gap between them, which is
+    // not enough for a Ø34 pad — ✕ drawn there lands on the meds puck, and
+    // the two read as one control. The side band at y ≈ h−77 is the only
+    // place clear of both the pucks below and the arc's second row above.
+    private static func padY(_ bounds: CGSize) -> CGFloat { bounds.height - 77 }
+
+    /// Bail-out pad: left edge, level with the gap under the arc.
+    public static func cancel(bounds: CGSize) -> CGPoint {
+        CGPoint(x: sideInset, y: padY(bounds))
+    }
+
+    /// Pop-a-level pad: mirrored on the right edge. Both stay put for every
+    /// fan at every depth, so exiting is one fixed reach.
+    public static func back(bounds: CGSize) -> CGPoint {
+        CGPoint(x: bounds.width - sideInset, y: padY(bounds))
+    }
+}

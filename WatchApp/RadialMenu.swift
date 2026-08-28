@@ -75,6 +75,11 @@ final class RadialMenuModel {
     private(set) var cancelPos: CGPoint = .zero
 
     private(set) var items: [RadialItem] = []
+    /// Stamped when a fan closes without firing a leaf. Silence after a
+    /// deliberate selection gesture is this app's most dangerous failure
+    /// mode — the wearer believes an intervention was logged when it wasn't
+    /// — so the live screen watches this and says so out loud.
+    private(set) var missedAt: Date? = nil
     /// Hand-placed positions (FanLayoutOverrides) — beat the fitted arc.
     private var fixedPos: [Int: CGPoint] = [:]
     /// Geometry for the CURRENT level. Its anchor is the "focus center":
@@ -106,15 +111,13 @@ final class RadialMenuModel {
         self.cancelPos = anchor
         self.stack = []
         self.lastLocation = nil
-        // Hand-placed root layout (absolute points), if one exists.
+        // Every fan blooms into the SAME top arc — fixed slots the wearer
+        // can learn, kept well clear of the occluded lower-right quadrant.
         self.fixedPos = [:]
-        if let k = key.flatMap(FanLayoutOverrides.key(forRootAnchor:)),
-           let ov = FanLayoutOverrides.table[k] {
-            for (i, p) in ov.items where i < items.count {
-                fixedPos[i] = clampToScreen(p)
-            }
-            if let c = ov.cancel { cancelPos = clampToScreen(c) }
+        for (i, p) in TopArcLayout.positions(count: items.count, bounds: bounds).enumerated() {
+            fixedPos[i] = clampToScreen(p)
         }
+        self.cancelPos = clampToScreen(TopArcLayout.cancel(bounds: bounds))
         self.openedAt = Date()
         self.isOpen = true
         WatchHaptics.play(.start)
@@ -155,11 +158,10 @@ final class RadialMenuModel {
     }
 
     func labelPosition(forIndex i: Int, count: Int) -> CGPoint {
-        // Measured against the REAL bubble positions (fixed or fitted), so
-        // hand-placed fans get the same collision-free labels as fitted ones.
-        let bubble = position(forIndex: i, count: count)
-        let others = (0..<count).filter { $0 != i }.map { position(forIndex: $0, count: count) }
-        return layout.labelPosition(around: layout.anchor, bubble: bubble, others: others)
+        // Fixed arc ⇒ fixed labels: straight below the bubble. The old
+        // outward/stacked search existed to dodge neighbours in a fitted
+        // arc; slots here are pitched wide enough that it can't happen.
+        TopArcLayout.labelPosition(for: position(forIndex: i, count: count))
     }
 
     // MARK: - Hold-drag flow
@@ -270,29 +272,16 @@ final class RadialMenuModel {
         layout.fit(count: children.count, preferredCenter: open,
                    startRadius: 56, radiusCap: 72)
 
-        // Exits opposite the fitted fan's center direction.
-        let opp = ((layout.arcStart + layout.arcEnd) / 2 + 180) * .pi / 180
-        backPos = clampToScreen(CGPoint(x: parentPos.x + 40 * cos(opp),
-                                        y: parentPos.y + 40 * sin(opp)))
-        cancelPos = clampToScreen(CGPoint(x: parentPos.x + 78 * cos(opp),
-                                          y: parentPos.y + 78 * sin(opp)))
-
-        // Hand-placed sub-fan: offsets ride the finger point, so the
-        // arrangement is exactly what was drawn in the layout editor.
+        // Children take over the very same arc the parent occupied, and the
+        // two exit pads never move — depth changes the CONTENTS of the arc,
+        // never its geometry.
         fixedPos = [:]
-        if let k = FanLayoutOverrides.key(forParentItem: parent.id),
-           let ov = FanLayoutOverrides.table[k] {
-            for (i, p) in ov.items where i < children.count {
-                fixedPos[i] = clampToScreen(CGPoint(x: parentPos.x + p.x,
-                                                    y: parentPos.y + p.y))
-            }
-            if let b = ov.back {
-                backPos = clampToScreen(CGPoint(x: parentPos.x + b.x, y: parentPos.y + b.y))
-            }
-            if let c = ov.cancel {
-                cancelPos = clampToScreen(CGPoint(x: parentPos.x + c.x, y: parentPos.y + c.y))
-            }
+        for (i, p) in TopArcLayout.positions(count: children.count,
+                                             bounds: layout.bounds).enumerated() {
+            fixedPos[i] = clampToScreen(p)
         }
+        backPos = clampToScreen(TopArcLayout.back(bounds: layout.bounds))
+        cancelPos = clampToScreen(TopArcLayout.cancel(bounds: layout.bounds))
         WatchHaptics.play(.success)        // the "pop" that ends the dwell ramp
     }
 
@@ -320,6 +309,10 @@ final class RadialMenuModel {
         if let item = items.first(where: { $0.id == hoveredID }),
            item.children?.isEmpty ?? true {
             fire(item)
+        } else if !hoveringCancel, !hoveringBack {
+            // Released on dead space or on a parent: nothing was recorded,
+            // and the wearer has no other way to tell.
+            missedAt = Date()
         }
         close()
     }
@@ -327,7 +320,7 @@ final class RadialMenuModel {
     // MARK: - Tap flow
 
     func tapSelect(_ item: RadialItem) {
-        guard tapMode else { return }
+        guard isOpen else { return }
         if let children = item.children, !children.isEmpty {
             expand(item, children: children)   // same cascade as hold mode
         } else {
@@ -337,13 +330,16 @@ final class RadialMenuModel {
     }
 
     /// Tap mode: the ✕ always closes; the chevron pad pops one level.
+    // No tapMode guard: the exit pads are now hit-testable in BOTH modes, so
+    // these must actually run in hold mode too. Both are idempotent and log
+    // nothing — the reason they, alone, are exempt from the tap-mode gate.
     func tapClose() {
-        guard tapMode else { return }
+        guard isOpen else { return }
         close()
     }
 
     func tapBack() {
-        guard tapMode else { return }
+        guard isOpen else { return }
         pop()
     }
 
@@ -376,7 +372,7 @@ struct RadialAnchor: View {
     var body: some View {
         VStack(spacing: 2) {
             Image(systemName: symbol)
-                .font(.system(size: 17, weight: .bold))
+                .font(.system(size: 26, weight: .bold))
                 .foregroundStyle(CRTheme.bg)
                 .frame(width: 42, height: 42)
                 .background(Circle().fill(color))
@@ -407,8 +403,12 @@ struct RadialAnchor: View {
                     // Tap-only: the hold opens the SAME tap fan a tap would —
                     // updateDrag/endDrag no-op in tap mode, so releasing
                     // leaves the fan up for tapping.
+                    // An anchor with nothing to bloom must not open an empty
+                    // fan — holding it is a no-op, not a one-item echo.
+                    let blooms = items()
+                    guard !blooms.isEmpty else { break }
                     model.open(anchor: center, radius: radius, bounds: bounds,
-                               items: items(), tapMode: tapOnly, key: id,
+                               items: blooms, tapMode: tapOnly, key: id,
                                onSelect: onSelect)
                 case .second(true, let drag):
                     if let drag { model.updateDrag(drag.location) }
@@ -452,7 +452,11 @@ struct RadialMenuOverlay: View {
             if model.isOpen {
                 Color.black.opacity(0.62)
                     .ignoresSafeArea()
-                    .onTapGesture { if model.tapMode { model.close() } }
+                    .onTapGesture { model.close() }
+                    // The one element that MUST NOT hit-test in hold mode: it
+                    // covers the whole screen, so it would capture the drag
+                    // the instant a fan opened.
+                    .allowsHitTesting(model.tapMode)
 
                 // Item bubbles
                 ForEach(Array(model.items.enumerated()), id: \.element.id) { i, item in
@@ -486,45 +490,6 @@ struct RadialMenuOverlay: View {
                         .allowsHitTesting(false)
                 }
 
-                // Back pad — the parent bubble's old spot; drag onto it (or
-                // tap it in tap mode) to pop one level.
-                if let back = model.backPos {
-                    ZStack {
-                        Circle()
-                            .fill(model.hoveringBack ? CRTheme.surfaceHi : CRTheme.surface.opacity(0.7))
-                        Circle()
-                            .strokeBorder(.white.opacity(model.hoveringBack ? 0.8 : 0.3),
-                                          lineWidth: 1.5)
-                        Image(systemName: "chevron.backward")
-                            .font(.system(size: 11, weight: .heavy))
-                            .foregroundStyle(model.hoveringBack ? CRTheme.text : CRTheme.textDim)
-                    }
-                    .frame(width: 30, height: 30)
-                    .scaleEffect(model.hoveringBack ? 1.2 : 1.0)
-                    .animation(.spring(duration: 0.15), value: model.hoveringBack)
-                    .position(back)
-                    .onTapGesture { model.tapBack() }
-                }
-
-                // ✕ pad — the root puck at level 0, then directly opposite
-                // the fan from the finger (beyond the back chevron) so it
-                // never sits on top of other elements.
-                ZStack {
-                    Circle()
-                        .fill(model.hoveringCancel ? CRTheme.surfaceHi : CRTheme.surface.opacity(0.6))
-                    Circle()
-                        .strokeBorder(.white.opacity(model.hoveringCancel ? 0.8 : 0.35),
-                                      lineWidth: 1.5)
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .heavy))
-                        .foregroundStyle(model.hoveringCancel ? CRTheme.text : CRTheme.textDim)
-                }
-                .frame(width: 34, height: 34)
-                .scaleEffect(model.hoveringCancel ? 1.2 : 1.0)
-                .animation(.spring(duration: 0.15), value: model.hoveringCancel)
-                .position(model.cancelPos)
-                .onTapGesture { model.tapClose() }
-
                 // Readout chip — the hovered item's name, big and glanceable
                 VStack(spacing: 1) {
                     if let crumb = model.breadcrumb {
@@ -551,9 +516,78 @@ struct RadialMenuOverlay: View {
         }
         .animation(.spring(duration: 0.22), value: model.isOpen)
         .animation(.spring(duration: 0.18), value: model.items)
-        .allowsHitTesting(model.isOpen && model.tapMode)
-        // In hold mode the anchor's own gesture keeps ownership of the touch,
-        // so the overlay must not intercept — hence hit testing only in tap mode.
+        // Open in BOTH modes now. The reason this was tap-only is that the
+        // SCRIM is a full-screen touchable surface and would steal the
+        // anchor's in-flight drag; that is now handled on the scrim itself
+        // (below), which is the narrow fix. Everything else in here is
+        // frame-sized and cannot intercept beyond its own bounds.
+        .allowsHitTesting(model.isOpen)
+        .overlay { exitPads }
+    }
+
+    /// Back and ✕ live OUTSIDE the tap-mode hit-testing gate.
+    ///
+    /// They used to inherit it, which made them dead in hold mode: the tap
+    /// fell straight through to whatever anchor puck happened to be behind
+    /// (the meds puck, for ✕), so pressing cancel re-opened a fan instead of
+    /// closing one. Safe to exempt — an in-flight drag is already owned by
+    /// the anchor's gesture and cannot be reassigned, so hold-drag-release is
+    /// untouched; these only claim a NEW touch. Both are idempotent and log
+    /// nothing, which is why they are the only elements allowed through.
+    /// Back and ✕ live OUTSIDE the tap-mode hit-testing gate.
+    ///
+    /// They used to inherit it, which made them dead in hold mode: the tap
+    /// fell through to whatever anchor puck was behind (the meds puck, for ✕),
+    /// so cancelling re-opened a fan instead of closing one. Safe to exempt —
+    /// an in-flight drag is already owned by the anchor's gesture and cannot
+    /// be reassigned, and both actions are idempotent and log nothing.
+    ///
+    /// Placed with .offset, NOT .position: a .position'd view expands to fill
+    /// its parent, so these pads covered the whole screen and swallowed every
+    /// bubble touch. Keeping each pad's layout size equal to its own 44 pt
+    /// frame is what confines hit-testing to the pad itself.
+    @ViewBuilder private var exitPads: some View {
+        if model.isOpen {
+            ZStack(alignment: .topLeading) {
+                // Sizes the stack to the whole overlay so .offset is measured
+                // from the top-left. MUST NOT hit-test: Color.clear is a real,
+                // touchable surface in SwiftUI (unlike genuinely empty space),
+                // and it silently swallowed every fan touch — the anchor's
+                // drag was cancelled the instant a fan opened, so no bubble
+                // could ever be hovered or fired.
+                Color.clear.allowsHitTesting(false)
+                if let back = model.backPos {
+                    pad(symbol: "chevron.backward",
+                        hovering: model.hoveringBack,
+                        fill: CRTheme.surface.opacity(0.7),
+                        at: back) { model.tapBack() }
+                }
+                pad(symbol: "xmark",
+                    hovering: model.hoveringCancel,
+                    fill: CRTheme.surface.opacity(0.85),
+                    at: model.cancelPos) { model.tapClose() }
+            }
+        }
+    }
+
+    /// One 44 pt exit pad, centred on `at` via offset so its layout footprint
+    /// stays 44 pt (see the note on exitPads).
+    private func pad(symbol: String, hovering: Bool, fill: Color,
+                     at point: CGPoint, action: @escaping () -> Void) -> some View {
+        let side: CGFloat = 44
+        return ZStack {
+            Circle().fill(hovering ? CRTheme.surfaceHi : fill)
+            Circle().strokeBorder(.white.opacity(hovering ? 0.8 : 0.35), lineWidth: 1.5)
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .heavy))
+                .foregroundStyle(hovering ? CRTheme.text : CRTheme.textDim)
+        }
+        .frame(width: side, height: side)
+        .contentShape(Circle())
+        .onTapGesture(perform: action)
+        .scaleEffect(hovering ? 1.15 : 1.0)
+        .animation(.spring(duration: 0.15), value: hovering)
+        .offset(x: point.x - side / 2, y: point.y - side / 2)
     }
 
     /// True when any bubble (or its outward label) reaches the top band.
@@ -614,11 +648,12 @@ struct RadialMenuOverlay: View {
         .scaleEffect(hovered ? 1.28 : 1.0)
         .animation(.spring(duration: 0.15), value: hovered)
 
-        if model.tapMode {
-            Button { model.tapSelect(item) } label: { core }
-                .buttonStyle(.plain)
-        } else {
-            core
-        }
+        // ALWAYS a Button, in both modes. Previously tap-only, which left the
+        // bubbles inert in hold mode — taps fell through the overlay onto the
+        // anchor pucks behind, so nothing could be picked by tapping at all.
+        // A Button's hit region is its own 38 pt frame, so this cannot swallow
+        // the screen the way a .position'd .onTapGesture does.
+        Button { model.tapSelect(item) } label: { core }
+            .buttonStyle(.plain)
     }
 }

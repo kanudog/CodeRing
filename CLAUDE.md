@@ -1,6 +1,6 @@
 # CLAUDE.md — CodeRing
 
-Demo pediatric code timer (watchOS + iOS + shared `CodeCore` package). NOT a medical device — the demo badge and disclaimers are permanent features, not placeholders.
+Demo pediatric code timer (watchOS + iOS + shared `CodeCore` package). NOT a medical device. Personal tool for Sebastian; the PDF disclaimer stays, on-screen badges are gone (see invariant 3).
 
 Full context: `BUILD_MANUAL.md`. Section 13 ("FOR AI MAINTAINERS") is your constitution for this repo — read it before editing anything.
 
@@ -23,7 +23,10 @@ Fix compile errors by editing sources, never by weakening the invariants below.
 
 1. Stable UUIDs in `Defaults.swift` (`C0DE0000-…`) are permanent. Never regenerate.
 2. mL is always the featured dose number; mg secondary (`DoseResult.volumeText` first).
-3. Demo badge on every top-level screen + PDF footer. Never remove or gate.
+3. PDF export keeps its demo footer. On-screen demo badges were REMOVED at
+   Sebastian's request (2026-08-22) — personal use only, and they cost scarce
+   watch screen space. `DemoBadge` still exists in `SharedUI.swift`; do not
+   re-add it to any screen without asking.
 4. `SessionEngine` owns no Timers — anchor dates only, `now` injected by views.
 5. All colors from `CRTheme` or stored `colorHex`. No literal hex in views.
 6. Persistence only through `CodeStore`. No UserDefaults, no stray file writes.

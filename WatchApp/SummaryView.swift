@@ -65,7 +65,6 @@ struct SummaryView: View {
                     .buttonStyle(.plain)
                 }
 
-                DemoBadge(compact: true)
             }
             .padding(.horizontal, 4)
         }

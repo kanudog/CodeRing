@@ -626,3 +626,67 @@ final class UndoLastEntryTests: XCTestCase {
         XCTAssertNil(engine.undoLastEntry(), "only structural records remain")
     }
 }
+
+/// The exit pads (✕ / back) used to be drawn on top of the bottom anchor
+/// pucks — ✕ landed squarely on the meds puck, so the two read as one
+/// control and a tap on ✕ re-opened the meds fan instead of closing.
+/// Geometry, not hit-testing, is what keeps them distinguishable.
+final class TopArcLayoutTests: XCTestCase {
+
+    /// Live GeometryReader on the 45 mm Series 9 (probe-measured 2026-07-23).
+    private let bounds = CGSize(width: 194, height: 191)
+
+    /// Anchor pucks as LiveSessionView.anchors() places them: Ø42 at
+    /// 0.15w / 0.5w / 0.85w, sides at h−36 and centre at h−30.
+    private var puckCenters: [CGPoint] {
+        [CGPoint(x: bounds.width * 0.15, y: bounds.height - 36),
+         CGPoint(x: bounds.width * 0.50, y: bounds.height - 30),
+         CGPoint(x: bounds.width * 0.85, y: bounds.height - 36)]
+    }
+
+    func testExitPadsClearTheAnchorPucks() {
+        // Ø34 pad vs Ø42 puck ⇒ centres must stay ≥38 pt apart to not overlap.
+        for pad in [TopArcLayout.cancel(bounds: bounds), TopArcLayout.back(bounds: bounds)] {
+            for puck in puckCenters {
+                let d = hypot(pad.x - puck.x, pad.y - puck.y)
+                XCTAssertGreaterThanOrEqual(
+                    d, 38,
+                    "exit pad at \(pad) overlaps the anchor puck at \(puck) — tapping it "
+                    + "will read as pressing the puck underneath")
+            }
+        }
+    }
+
+    func testExitPadsNeverCollideWithTheArc() {
+        for count in 1...6 {
+            let arc = TopArcLayout.positions(count: count, bounds: bounds)
+            for pad in [TopArcLayout.cancel(bounds: bounds), TopArcLayout.back(bounds: bounds)] {
+                for (i, p) in arc.enumerated() {
+                    XCTAssertGreaterThan(
+                        hypot(pad.x - p.x, pad.y - p.y), 40,
+                        "count \(count): exit pad sits on arc slot \(i)")
+                }
+            }
+        }
+    }
+
+    /// Fixed slots are the whole point — a 2-item fan and a 4-item fan must
+    /// share pitch and row height so muscle memory survives across fans.
+    func testArcSlotsAreFixedPitchAndOnScreen() {
+        for count in 1...6 {
+            let pts = TopArcLayout.positions(count: count, bounds: bounds)
+            XCTAssertEqual(pts.count, count)
+            for p in pts {
+                XCTAssertGreaterThanOrEqual(p.x, 18, "count \(count): slot off the left edge")
+                XCTAssertLessThanOrEqual(p.x, bounds.width - 18, "count \(count): slot off the right edge")
+                XCTAssertGreaterThanOrEqual(p.y, 16, "count \(count): slot off the top edge")
+            }
+            // Neighbours within a row never come closer than a bubble width.
+            let top = TopArcLayout.topRowCount(count)
+            for i in 1..<max(1, top) {
+                XCTAssertGreaterThanOrEqual(hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y), 40,
+                                            "count \(count): row-0 slots \(i-1)/\(i) too close")
+            }
+        }
+    }
+}

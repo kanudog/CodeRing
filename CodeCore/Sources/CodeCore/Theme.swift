@@ -40,6 +40,7 @@ public enum CRTheme {
     public static let commsHex = "818CF8"        // team comms — indigo
     public static let customHex = "F0ABFC"       // user-defined — pink
     public static let demoHex = "FFB020"         // demo badge — amber
+    public static let pauseHex = "FBCB89"        // pause control — warm sand (Sebastian, 2026-08-28)
 
     public static var bg: Color { Color(hex: bgHex) }
     public static var surface: Color { Color(hex: surfaceHex) }
@@ -52,6 +53,7 @@ public enum CRTheme {
     public static var airway: Color { Color(hex: airwayHex) }
     public static var access: Color { Color(hex: accessHex) }
     public static var cpr: Color { Color(hex: cprHex) }
+    public static var pause: Color { Color(hex: pauseHex) }
     public static var rosc: Color { Color(hex: roscHex) }
     public static var rhythm: Color { Color(hex: rhythmHex) }
     public static var care: Color { Color(hex: careHex) }

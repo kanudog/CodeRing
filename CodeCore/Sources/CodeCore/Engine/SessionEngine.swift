@@ -15,7 +15,7 @@ import Observation
 public final class SessionEngine {
 
     public private(set) var session: CodeSession
-    public let protocolDef: CodeProtocolDefinition
+    public private(set) var protocolDef: CodeProtocolDefinition
     public let drugSet: DrugProfileSet
     public let eventDefs: [EventDefinition]
 
@@ -313,6 +313,17 @@ public final class SessionEngine {
             event.category != .cpr && event.category != .outcome &&
             !Self.structuralEventIDs.contains(event.definitionID ?? "")
         }
+    }
+
+    /// Re-label a running code. Every PALS variant currently shares one set
+    /// of timers/drugs/events (see `Defaults.palsVariant`), so this touches
+    /// identity only — no anchor date moves and the running cycle keeps its
+    /// start, which is why it is safe to offer mid-code. If algorithms ever
+    /// diverge, revisit: the timer specs would change under a live session.
+    public func changeProtocol(_ p: CodeProtocolDefinition) {
+        protocolDef = p
+        session.protocolID = p.id
+        session.protocolName = p.name
     }
 
     /// Removes the most recent user-logged entry — mis-taps happen mid-code.
