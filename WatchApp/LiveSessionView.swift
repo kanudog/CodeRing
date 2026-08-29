@@ -142,16 +142,11 @@ struct LiveSessionView: View {
     private func chrome(now: Date) -> some View {
         ZStack(alignment: .topLeading) {
             Color.clear.allowsHitTesting(false)
-            if engine.roscAchieved {
-                // ROSC was never laid out by hand — it keeps its own block,
-                // centred. Lay it out in the Bench before converting it.
-                roscBlock(now: now)
-                    .frame(width: WatchLayout.screen.width,
-                           height: WatchLayout.screen.height)
-            } else {
-                centreStack(now: now)
-                chipsLayer(now: now)
-            }
+            if engine.roscAchieved { roscStack(now: now) }
+            else { centreStack(now: now) }
+            // Chips ride EVERY phase — a med given before Start CPR or after
+            // ROSC keeps its timer visible the moment it is logged.
+            chipsLayer(now: now)
             headerLayer(now: now)
         }
         .frame(width: WatchLayout.screen.width,
@@ -503,88 +498,90 @@ struct LiveSessionView: View {
         .buttonStyle(.plain)
     }
 
-    // Post-ROSC block: RE-ARREST is the escape hatch back into the CPR flow,
-    // HANDOFF is the phone-call card, and the ring carries the vitals cadence.
-    private func roscBlock(now: Date) -> some View {
+    // MARK: - Post-ROSC
+    //
+    // Hand-placed like every other state (WatchLayout). Shared chrome — the
+    // header, patient strip, clocks, pucks and med chips — is drawn by the
+    // same code paths at the same coordinates, so nothing shifts when the
+    // outcome changes. Only the centre stack differs, plus RE-ARREST and
+    // HANDOFF, which take the slots the pause button and shock bolt vacate.
+
+    @ViewBuilder
+    private func roscStack(now: Date) -> some View {
         let vitalsRem = engine.vitalsRemaining(at: now)
         let vitalsLen = engine.protocolDef.vitalsSpec?.seconds ?? 300
         let overdue = (vitalsRem ?? 1) <= 0
         let due = (vitalsRem ?? 1) <= 15
 
-        return VStack(spacing: 3) {
-            HStack(spacing: 5) {
-                Button {
-                    engine.reArrest()
-                    WatchHaptics.play(.retry)
-                    flashLast()
-                } label: {
-                    Text("RE-ARREST")
-                        .font(.system(size: 12, weight: .heavy, design: .rounded))
-                        .tracking(0.8)
-                        .foregroundStyle(CRTheme.bg)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 26)
-                        .background(Capsule().fill(CRTheme.med))
-                }
-                .buttonStyle(.plain)
+        ringView(WatchLayout.vitalsRing,
+                 progress: max(0, vitalsRem ?? 0) / max(1, vitalsLen),
+                 color: CRTheme.rosc, overdue: overdue)
 
-                Button { showHandoff = true } label: {
-                    Text("HANDOFF")
-                        .font(.system(size: 11, weight: .heavy, design: .rounded))
-                        .tracking(0.6)
-                        .foregroundStyle(CRTheme.rosc)
-                        .padding(.horizontal, 10)
-                        .frame(height: 26)
-                        .background(Capsule().fill(CRTheme.surfaceHi))
-                }
-                .buttonStyle(.plain)
-            }
-
-            ZStack {
-                RingGauge(progress: max(0, vitalsRem ?? 0) / max(1, vitalsLen),
-                          color: CRTheme.rosc, lineWidth: 8, overdue: overdue)
-                    .frame(width: 92, height: 92)
-
-                Button {
-                    guard due else { return }
-                    engine.confirmVitals()
-                    WatchHaptics.play(.success)
-                    flashLast()
-                } label: {
-                    VStack(spacing: 0) {
-                        Text("ROSC \(crClock(engine.roscElapsed(at: now)))")
-                            .font(.system(size: 9, weight: .heavy, design: .rounded).monospacedDigit())
-                            .foregroundStyle(CRTheme.rosc)
-                        if let rem = vitalsRem {
-                            Text("NEXT VITALS")
-                                .font(.system(size: 7.5, weight: .heavy, design: .rounded))
-                                .tracking(0.5)
-                                .foregroundStyle(overdue ? CRTheme.med : CRTheme.textDim)
-                            Text(crClockSigned(rem))
-                                .font(.system(size: 21, weight: .heavy, design: .rounded).monospacedDigit())
-                                .foregroundStyle(overdue ? CRTheme.med : CRTheme.text)
-                            if due {
-                                Text("TAP — VITALS")
-                                    .font(.system(size: 8, weight: .heavy, design: .rounded))
-                                    .foregroundStyle(CRTheme.bg)
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(overdue ? CRTheme.med : CRTheme.rosc))
-                                    .padding(.top, 2)
-                            }
-                        } else {
-                            Image(systemName: "heart.fill")
-                                .font(.system(size: 22, weight: .bold))
-                                .foregroundStyle(CRTheme.rosc)
-                        }
-                    }
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .frame(width: 78)
-                }
-                .buttonStyle(.plain)
-            }
+        // The ring doubles as the vitals-confirmed target, exactly as the CPR
+        // ring is the pulse-check target.
+        Button {
+            guard due else { return }
+            engine.confirmVitals()
+            WatchHaptics.play(.success)
+            flashLast()
+        } label: {
+            Circle().fill(Color.clear).contentShape(Circle())
         }
+        .buttonStyle(.plain)
+        .frame(width: WatchLayout.vitalsRing.diameter, height: WatchLayout.vitalsRing.diameter)
+        .position(WatchLayout.vitalsRing.center)
+
+        placed(WatchLayout.roscElapsed, "ROSC \(crClock(engine.roscElapsed(at: now)))",
+               mono: true, color: CRTheme.rosc)
+
+        if let rem = vitalsRem {
+            placed(WatchLayout.vitalsLabel, "NEXT VITALS",
+                   color: overdue ? CRTheme.med : CRTheme.textDim)
+            placed(WatchLayout.vitalsCount, crClockSigned(rem), mono: true,
+                   color: overdue ? CRTheme.med : CRTheme.text)
+            if due {
+                Text("TAP — VITALS")
+                    .font(.system(size: WatchLayout.vitalsPrompt.font, weight: .heavy, design: .rounded))
+                    .foregroundStyle(CRTheme.bg)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Capsule().fill(overdue ? CRTheme.med : CRTheme.rosc))
+                    .position(WatchLayout.vitalsPrompt.center)
+                    .allowsHitTesting(false)
+            }
+        } else {
+            Image(systemName: "heart.fill")
+                .font(.system(size: WatchLayout.roscHeart.glyph, weight: .bold))
+                .foregroundStyle(CRTheme.rosc)
+                .position(WatchLayout.roscHeart.center)
+                .allowsHitTesting(false)
+        }
+
+        capsuleButton(WatchLayout.reArrest, "RE-ARREST",
+                      fill: CRTheme.med, tint: CRTheme.bg) {
+            engine.reArrest(); WatchHaptics.play(.retry); flashLast()
+        }
+        capsuleButton(WatchLayout.handoff, "HANDOFF",
+                      fill: CRTheme.surfaceHi, tint: CRTheme.rosc) {
+            showHandoff = true
+        }
+    }
+
+    /// A pill-shaped control placed by its centre, like `discButton`.
+    private func capsuleButton(_ spec: WatchLayout.Label, _ title: String,
+                               fill: Color, tint: Color,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: spec.font, weight: .heavy, design: .rounded))
+                .tracking(0.5)
+                .foregroundStyle(tint)
+                .lineLimit(1).minimumScaleFactor(0.6)
+                .frame(width: spec.size.width, height: spec.size.height)
+                .background(Capsule().fill(fill))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .position(spec.center)
     }
 
     // MARK: - Anchors
@@ -634,11 +631,13 @@ struct LiveSessionView: View {
             // Shock — AMBER. Tap = next defib energy; hold = Defib ladder /
             // Cardiovert. (Tap-only mode turns the tap into the menu too.)
             //
-            // Present in EVERY pre-ROSC state, including before compressions
-            // start (Sebastian, 2026-08-28): defibrillation can precede CPR,
-            // and `quickShock` only logs an event — it has no dependency on
-            // the cycle having started.
-            if !engine.roscAchieved {
+            // Present in EVERY state, including before compressions and after
+            // ROSC (Sebastian, 2026-08-28). Defibrillation can precede CPR,
+            // and `quickShock` only logs an event — no dependency on the
+            // cycle having started. Post-ROSC it is kept mainly so the bottom
+            // row of anchors stays visually even; re-arrest is the realistic
+            // path back to shocking.
+            Group {
                 RadialAnchor(id: "shock",
                              center: shock,
                              symbol: "bolt.fill",

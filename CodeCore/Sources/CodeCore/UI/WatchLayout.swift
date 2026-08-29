@@ -75,7 +75,7 @@ public enum WatchLayout {
 
     public static let logButton    = Disc(29,  24, d: 34, glyph: 26)
     public static let timersButton = Disc(71,  23, d: 34, glyph: 26)
-    public static let pauseButton  = Disc(174, 98, d: 34, glyph: 20)
+    public static let pauseButton  = Disc(99, 163, d: 34, glyph: 20)
     public static let muteButton   = Disc(113, 23, d: 34, glyph: 26)
     public static let flagButton   = Disc(174, 55, d: 34, glyph: 26)
 
@@ -126,6 +126,32 @@ public enum WatchLayout {
     /// (2026-08-24). It used to float in the middle of the stack instead.
     public static let pausedText = Label(cprRing.center.x, cprRing.center.y,
                                          w: 92, h: 24, font: 15)
+
+    // MARK: - Post-ROSC
+    //
+    // Shared elements (header, patient strip, clocks, pucks, med chips) hold
+    // the SAME positions here as every other state — only the centre stack
+    // changes and two extra controls appear. RE-ARREST and HANDOFF take the
+    // slots the pause button and shock bolt vacate after ROSC.
+
+    /// Same slot and size as the CPR ring, so the ring never appears to jump
+    /// when the outcome changes.
+    public static let vitalsRing = Ring(99, 121, d: 94, stroke: 8)
+
+    /// Mirrors `pulseLabel` — same slot, same size.
+    public static let vitalsLabel = Label(99, 59.5, w: 138, h: 11, font: 10)
+    /// Mirrors `countdown`.
+    public static let vitalsCount = Label(99, 121, w: 53.5, h: 30, font: 25)
+    /// Time since ROSC. Takes the cycle chip's slot, which is free post-ROSC.
+    public static let roscElapsed = Label(99, 98, w: 76, h: 11, font: 10)
+    /// "TAP — VITALS" prompt, shown only when a check is due.
+    public static let vitalsPrompt = Label(99, 150, w: 76, h: 14, font: 8)
+    /// Fallback when the protocol carries no vitals cadence.
+    public static let roscHeart = Disc(99, 121, d: 22, glyph: 22)
+
+    /// Stacked down the right, clear of the ring at every y they occupy.
+    public static let reArrest = Label(170, 85,  w: 52, h: 22, font: 9)
+    public static let handoff  = Label(170, 110, w: 52, h: 22, font: 9)
 
     // MARK: - Med timer chips
 

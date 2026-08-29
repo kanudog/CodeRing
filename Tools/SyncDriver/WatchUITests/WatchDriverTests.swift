@@ -1534,6 +1534,36 @@ final class WatchDriverTests: XCTestCase {
                        "still showing START CPR after the tap")
     }
 
+    /// v22: reaches the post-ROSC screen via the events fan (ROSC is a leaf
+    /// there, so no 120 s cycle wait) and dumps its frames. The shared chrome
+    /// must land on the SAME coordinates as every other state.
+    func testWQ_roscLayoutFrames() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10)); go.tap()
+        sleep(3)
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x/f.width, dy: y/f.height))
+        }
+        at(99, 121).tap()                    // ring → START CPR
+        sleep(3)
+
+        // Events fan has 6 items ⇒ TopArcLayout rows of 3 + 3. ROSC is index
+        // 5: row 1, rightmost — fan-space (141, 79.2) + the (2, 51) inset.
+        at(74, 196).press(forDuration: 0.4, thenDragTo: at(143, 130))
+        sleep(3)
+
+        XCTAssertTrue(ring.buttons["RE-ARREST"].waitForExistence(timeout: 8),
+                      "post-ROSC screen not shown — ROSC leaf may have moved")
+        XCTAssertTrue(ring.buttons["HANDOFF"].exists, "HANDOFF missing")
+        print("=====ROSC=====")
+        print(ring.debugDescription)
+        print("=====END_ROSC=====")
+        sleep(3)
+    }
+
     /// Step B (sync verification): run a short code start→finish.
     func testB_runQuickCode() throws {
         toWeightPage()
