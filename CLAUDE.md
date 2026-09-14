@@ -36,8 +36,22 @@ Fix compile errors by editing sources, never by weakening the invariants below.
 
 SwiftUI + Observation, zero third-party dependencies, explicit `public` in CodeCore, comments explain *why*. Watch files → Watch target only; iOS files → iOS target only; wrong target membership is the #1 build-error source.
 
+## Layout is hand-placed, in two files
+
+- `CodeCore/UI/WatchLayout.swift` — the live SCREEN, in screen points (198×242).
+- `CodeCore/UI/FanLayout.swift` — the radial submenus, in FAN space (194×191,
+  inset 2,51). Keyed by anchor id at the root and by parent item id (`grp:*`)
+  below it. Lookup is **count-exact** and falls back to `TopArcLayout` on any
+  mismatch, because several fans are sized at runtime. Fans still on their
+  `.arc(n)` seed are byte-identical to the old computed arc; a test enforces it.
+- Both are exported from the Layout Bench. Never convert between the two spaces
+  by hand — use `WatchLayout.toLive(_:)`.
+
 ## Sharp edges
 
 - `RadialMenu`: anchor's LongPress→Drag sequence owns the touch; overlay hit-tests only in tap mode. Do not reorder that ZStack or force `allowsHitTesting(true)`.
+- `Tools/SyncDriver` hardcodes anchor coordinates and cannot import CodeCore. The
+  `Pucks` enum at the top of `WatchDriverTests.swift` mirrors `WatchLayout` —
+  **update it whenever a puck moves**, or tests fail on a healthy app.
 - `ToneMetronome`: documented benign race on `envelope` between main and render thread. Leave it.
 - `DrugEditorView`: force-unwrapped bindings behind an `if drug != nil` guard. Keep the guard.

@@ -1,6 +1,24 @@
 // Drives the installed CodeRing watch app by bundle id.
 import XCTest
 
+/// Anchor-puck centres in SCREEN points, mirroring
+/// `CodeCore/UI/WatchLayout.swift`. This project cannot import CodeCore, so
+/// the values are copied — **when a puck moves in WatchLayout, move it here.**
+///
+/// They stopped being proportional on 2026-08-24, when the live screen went
+/// to absolute placement and a fourth puck (Shock) split the bottom row. The
+/// old `f.width * 0.5, f.height − 40` for Events now lands 26 pt from the
+/// Events puck and 26 pt from the Shock puck — in the gap, hitting neither,
+/// which reads exactly like "the menu is broken" when it is the test that is.
+enum Pucks {
+    static let meds   = CGPoint(x: 30,  y: 210)
+    static let events = CGPoint(x: 74,  y: 196)
+    static let shock  = CGPoint(x: 124, y: 196)
+    static let fluids = CGPoint(x: 170, y: 210)
+    /// Ø42 — a tap has to land within 21 pt of a centre.
+    static let diameter: CGFloat = 42
+}
+
 final class WatchDriverTests: XCTestCase {
 
     let ring = XCUIApplication(bundleIdentifier: "com.sebastianheredia.CodeRing.watchkitapp")
@@ -302,7 +320,7 @@ final class WatchDriverTests: XCTestCase {
             usleep(700_000)
         }
         let shockX = f.width * 0.885, shockY = 45.8 + dy   // shock anchor
-        let eventsX = f.width * 0.5, eventsY = f.height - 36
+        let eventsX = Pucks.events.x, eventsY = Pucks.events.y   // see Pucks
         let volX = f.width * 0.85, volY = f.height - 46
 
         // 1 · shock root fan: Defib top-center (116,38), Cardiovert (142,96).
@@ -344,7 +362,7 @@ final class WatchDriverTests: XCTestCase {
         func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
             ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
         }
-        let sideY = f.height - 46, centerY = f.height - 36
+        let sideY = f.height - 46, centerY = Pucks.events.y      // see Pucks
         let cx = f.width * 0.15, vx = f.width * 0.85
 
         // Seven distinct items: 5 rhythm/code meds + dextrose + calcium.
@@ -556,8 +574,8 @@ final class WatchDriverTests: XCTestCase {
         func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
             ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
         }
-        let sideY = f.height - 46, centerY = f.height - 36
-        let ex = f.width * 0.5
+        let sideY = f.height - 46, centerY = Pucks.events.y      // see Pucks
+        let ex = Pucks.events.x   // was f.width * 0.5; the puck moved 2026-08-24
 
         // Rhythm/Code: select epi (leaf, index 0 ≈ straight up).
         let cx = f.width * 0.15
@@ -620,7 +638,7 @@ final class WatchDriverTests: XCTestCase {
         func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
             ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
         }
-        let sideY = f.height - 46, centerY = f.height - 36
+        let sideY = f.height - 46, centerY = Pucks.events.y      // see Pucks
 
         // 1 — Rhythm/Code: epi is index 0 ≈ straight up at r≈108.
         let cx = f.width * 0.15
@@ -638,7 +656,7 @@ final class WatchDriverTests: XCTestCase {
         // 3 — Events: park on IV's FUTURE position; the hold hovers Access
         // (nearest), expands to IV/IO, rehovers IV, expands limbs, rehovers
         // a limb — one continuous gesture, two levels deep.
-        let ex = f.width * 0.5
+        let ex = Pucks.events.x   // was f.width * 0.5; the puck moved 2026-08-24
         at(ex, centerY).press(forDuration: 0.5, thenDragTo: at(ex - 77, centerY - 60),
                               withVelocity: .slow, thenHoldForDuration: 5.6)
         sleep(1)
@@ -727,7 +745,7 @@ final class WatchDriverTests: XCTestCase {
 
         // 3 — Events (center): hold, dwell on Access (index 1 of 6, arc
         // -168+31.2= -136.8°, r 74 → offset (-54.1, -50.5)) to expand IV/IO.
-        let ex = f.width * 0.5
+        let ex = Pucks.events.x   // was f.width * 0.5; the puck moved 2026-08-24
         at(ex, ay).press(forDuration: 0.5, thenDragTo: at(ex - 54, ay - 50),
                          withVelocity: .slow, thenHoldForDuration: 3.4)
         sleep(2)   // shot: access → IV/IO
@@ -770,7 +788,7 @@ final class WatchDriverTests: XCTestCase {
         func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
             ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
         }
-        let ay = f.height - 40
+        let ay = Pucks.events.y   // was f.height − 40; see Pucks
 
         // Epi via hold-drag on MEDS.
         let mx = f.width * 0.84
@@ -783,7 +801,7 @@ final class WatchDriverTests: XCTestCase {
         // Chip abbreviations (IVF/BLOOD) are unit-tested in CodeCore —
         // synthetic taps can't open tap mode, so no UI path here.
         // EVENTS bloom labels: hold on dead space for the burst.
-        let ex = f.width * 0.5
+        let ex = Pucks.events.x   // was f.width * 0.5; the puck moved 2026-08-24
         at(ex, ay).press(forDuration: 0.5,
                          thenDragTo: at(ex + 55, ay - 50),
                          withVelocity: .slow,
@@ -872,7 +890,7 @@ final class WatchDriverTests: XCTestCase {
         func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
             ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
         }
-        let ay = f.height - 40
+        let ay = Pucks.events.y   // was f.height − 40; see Pucks
 
         // Epi → chip lands on the LEFT gutter.
         let mx = f.width * 0.84
@@ -886,7 +904,7 @@ final class WatchDriverTests: XCTestCase {
 
         // EVENTS → hold on Access ~3 s: 2 s dwell expands the limbs, back
         // pad appears NEXT TO the ✕. Release there logs nothing.
-        let ex = f.width * 0.5
+        let ex = Pucks.events.x   // was f.width * 0.5; the puck moved 2026-08-24
         // Access = index 2 of 6 (−105.6°, r 74) → offset (−19.9, −71.3).
         at(ex, ay).press(forDuration: 0.5,
                          thenDragTo: at(ex - 20, ay - 71),
@@ -983,7 +1001,7 @@ final class WatchDriverTests: XCTestCase {
         func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
             ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
         }
-        let ay = f.height - 40
+        let ay = Pucks.events.y   // was f.height − 40; see Pucks
 
         // 2 — MEDS bloom: labeled arc, release on Epinephrine (index 0,
         // arc -176°, r 84 → offset (-83.8, -5.9) from the meds anchor).
@@ -999,7 +1017,7 @@ final class WatchDriverTests: XCTestCase {
 
         // 3 — EVENTS bloom: hold on dead space so the burst captures every
         // label; release there logs nothing.
-        let ex = f.width * 0.5
+        let ex = Pucks.events.x   // was f.width * 0.5; the puck moved 2026-08-24
         at(ex, ay).press(forDuration: 0.5,
                          thenDragTo: at(ex + 30, ay - 40),
                          withVelocity: .slow,
@@ -1242,14 +1260,19 @@ final class WatchDriverTests: XCTestCase {
         func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
             ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
         }
-        let ax = f.width * 0.5
-        let ay = f.height - 40
         // Hold at the EVENTS anchor, drag to Rhythm check, dwell there 4 s
         // so the burst can catch the name tag, then release (logs it).
-        at(ax, ay).press(forDuration: 0.5,
-                         thenDragTo: at(ax - 54, ay - 51),
-                         withVelocity: .slow,
-                         thenHoldForDuration: 4.0)
+        //
+        // Target was `ax - 54, ay - 51`, aimed at the FITTED arc this app had
+        // before 2026-08-22. Under TopArcLayout the six-item events fan lands
+        // on fixed slots, measured off the running app by testWQ:
+        //   row 0  (55, 81.5) Rhythm · (99, 77) Access · (143, 81.5) Airway
+        //   row 1  (55, 133.5) Comms · (99, 129) Temp  · (143, 133.5) ROSC
+        at(Pucks.events.x, Pucks.events.y)
+            .press(forDuration: 0.5,
+                   thenDragTo: at(43, 78.5),          // slot 0 — Rhythm (leaf)
+                   withVelocity: .slow,
+                   thenHoldForDuration: 4.0)
         sleep(2)
         ring.terminate()   // abandon this demo code — nothing persists
     }
@@ -1269,14 +1292,13 @@ final class WatchDriverTests: XCTestCase {
         func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
             ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
         }
-        let ax = f.width * 0.5
-        let ay = f.height - 40
-        // Bloom arc: -168°…-12°, radius 74, six items.
-        // index 1 = Rhythm check (leaf) at -136.8°; index 3 = Access (parent) at -74.4°.
-        let anchor = at(ax, ay)
-        anchor.press(forDuration: 0.5, thenDragTo: at(ax - 54, ay - 51))
+        // Slots are the fixed TopArcLayout ones (see testWH), not the old
+        // fitted arc's angles — index 0 is Rhythm (a LEAF, so it logs) and
+        // index 1 is Access (a PARENT, so releasing on it must log nothing).
+        let anchor = at(Pucks.events.x, Pucks.events.y)
+        anchor.press(forDuration: 0.5, thenDragTo: at(43, 78.5))    // leaf → logs
         sleep(2)
-        anchor.press(forDuration: 0.5, thenDragTo: at(ax + 20, ay - 71))
+        anchor.press(forDuration: 0.5, thenDragTo: at(99, 75))      // parent → silent
         sleep(2)
 
         // End the code (flag → End & review) so it syncs to the phone.
@@ -1323,7 +1345,7 @@ final class WatchDriverTests: XCTestCase {
         let anchor = at(74, 196)
         // Top arc, 6 items ⇒ rows of 3. Index 1 (ACCESS, a parent) is the
         // apex of row 0: fan-space (97, 26) + the ~51 pt GeometryReader dy.
-        let access = at(99, 77)
+        let access = at(99, 75)
         anchor.press(forDuration: 0.4, thenDragTo: access)
         // shot: root arc up, finger parked on ACCESS
         sleep(2)
@@ -1349,15 +1371,20 @@ final class WatchDriverTests: XCTestCase {
         func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
             ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
         }
-        // Events puck, bottom centre → 6-item fan. Slot 0 (RHYTHM) is a leaf:
-        // TopArcLayout row 0 left = fan-space (53, 30.7) + ~51 pt reader dy.
-        // Events puck — WatchLayout.eventsPuck (74, 196).
-        at(74, 196)
-            .press(forDuration: 0.4, thenDragTo: at(55, 84))
+        // MEDS puck → Epinephrine, slot 0 of the hand-placed Meds fan.
+        //
+        // This used to drag onto the Events fan's slot 0. That slot is the
+        // pulse check now, which opens the hands-off screen instead of
+        // logging a line — fine behaviour, useless for a test whose whole job
+        // is "does releasing on a leaf log the leaf". Every Meds slot is a
+        // plain drug, so the outcome is unambiguous. testWS owns the pulse
+        // check.
+        at(Pucks.meds.x, Pucks.meds.y)
+            .press(forDuration: 0.4, thenDragTo: at(34, 82))
         // NO sleep here: the confirmation toast lives exactly 2 s, so sleeping
         // before the assertion raced it away and made a working app look broken.
         let logged = ring.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS[c] 'Rhythm'")).firstMatch
+            NSPredicate(format: "label CONTAINS[c] 'Epi'")).firstMatch
         let missed = ring.staticTexts["Nothing logged"]
         XCTAssertFalse(missed.exists,
                        "released on a real leaf but the app reported nothing logged")
@@ -1369,6 +1396,9 @@ final class WatchDriverTests: XCTestCase {
     /// v16: Sebastian's actual interaction — TAP the anchor, then TAP a
     /// bubble. Distinct from the drag path in testWJ; the tap path was never
     /// exercised and is the one he reports as dead.
+    /// NOTE: the arc-slot coordinates in this test and its neighbours are
+    /// Sebastian's HAND-PLACED positions (FanLayout.table), not computed ones.
+    /// They move whenever he re-places a fan — check them after any export.
     func testWK_tapPathSelectsABubble() throws {
         toWeightPage()
         ring.buttons["Next"].tap()
@@ -1381,11 +1411,17 @@ final class WatchDriverTests: XCTestCase {
         func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
             ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
         }
-        at(f.width * 0.5, f.height - 40).tap()      // events puck — plain tap
+        // Events puck. Was `f.width * 0.5, f.height - 40` — the centre slot the
+        // Events puck occupied before Shock joined the bottom row. That tap
+        // has been landing in the gap between the two ever since, so this
+        // guard was failing on a perfectly healthy app.
+        // Meds fan, not Events: its slot 0 is the pulse check now, which
+        // opens the hands-off screen rather than logging. See testWJ.
+        at(Pucks.meds.x, Pucks.meds.y).tap()
         sleep(2)
-        at(55, 84).tap()                            // slot 0 (RHYTHM) as drawn
+        at(34, 82).tap()                            // slot 0 — Epinephrine, hand-placed
         let logged = ring.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS[c] 'Rhythm'")).firstMatch
+            NSPredicate(format: "label CONTAINS[c] 'Epi'")).firstMatch
         XCTAssertTrue(logged.waitForExistence(timeout: 4),
                       "tapping arc slot 0 logged nothing — tap path is dead")
         sleep(1)
@@ -1591,4 +1627,184 @@ final class WatchDriverTests: XCTestCase {
         end.tap()
         sleep(5)
     }
+
+    // MARK: - v22: fan geometry dump (for the Layout Bench, 2026-08-29)
+
+    /// Prints the REAL rendered frames of every radial fan we place by hand,
+    /// at each depth and each item count. Seeding the bench from screenshots
+    /// was wrong last time; these are point frames straight out of the
+    /// accessibility tree.
+    ///
+    /// Runs in TAP-ONLY mode, written straight into the app container by the
+    /// caller (`settings.json`) rather than driven through the Settings form:
+    /// scrolled-past Form rows leave the accessibility tree, and a silent
+    /// toggle no-op has stranded this harness before. Tap-only also keeps a
+    /// fan OPEN after the touch lifts — in hold mode `endDrag` closes it, so
+    /// there would be nothing left on screen to measure.
+    func testWQ_dumpFanFrames() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10)); go.tap()
+        sleep(3)
+
+        let f = ring.frame
+        print("=====FAN_SCREEN===== \(f)")
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+
+        // Hand-placed slot centres, SCREEN points, mirroring
+        // CodeCore/UI/FanLayout.swift. These were COMPUTED from TopArcLayout
+        // until 2026-08-29; every fan is placed by hand now, so a computed
+        // tap lands on the wrong bubble — it opened "More" instead of
+        // "Fluids" and missed Comms entirely, which reads like a layout bug
+        // and is not one. **Update these when a fan is re-placed.**
+        enum Slots {
+            static let shockDefib   = (CGFloat(71), CGFloat(75.9))   // shock slot 0
+            static let supportFluid = (CGFloat(34), CGFloat(82))     // support slot 4
+            static let eventsAccess = (CGFloat(99), CGFloat(75))     // events slot 1
+            static let eventsAirway = (CGFloat(155), CGFloat(78.5))  // events slot 2
+            static let eventsComms  = (CGFloat(43), CGFloat(144.5))  // events slot 3
+            static let commsCall    = (CGFloat(52), CGFloat(96))     // grp:comms slot 0
+        }
+
+        func dump(_ tag: String) {
+            sleep(2)
+            print("=====FAN \(tag)=====")
+            print(ring.debugDescription)
+            print("=====END \(tag)=====")
+        }
+
+        // Anchor pucks, screen points (WatchLayout).
+        let meds = (CGFloat(30), CGFloat(210))
+        let events = (CGFloat(74), CGFloat(196))
+        let shock = (CGFloat(124), CGFloat(196))
+        let fluids = (CGFloat(170), CGFloat(210))
+        // ✕ pad — closes whatever is open, at every depth.
+        let cancel = (CGFloat(26), CGFloat(165))
+
+        // count 5, depth 1
+        at(meds.0, meds.1).tap();       dump("code.root n=5 d=1")
+        at(cancel.0, cancel.1).tap(); sleep(1)
+
+        // count 2, depth 1  +  count 3, depth 2 (defib rungs)
+        at(shock.0, shock.1).tap();     dump("shock.root n=2 d=1")
+        at(Slots.shockDefib.0, Slots.shockDefib.1).tap();  dump("shock.defib n=3 d=2")
+        at(cancel.0, cancel.1).tap(); sleep(1)
+
+        // count 5, depth 1  +  two 3-item children
+        at(fluids.0, fluids.1).tap();   dump("support.root n=5 d=1")
+        // Array is reversed, so Fluids is the LAST item.
+        at(Slots.supportFluid.0, Slots.supportFluid.1).tap();  dump("support.fluids n=3 d=2")
+        at(cancel.0, cancel.1).tap(); sleep(1)
+
+        // count 6, depth 1 — and the deep comms path
+        at(events.0, events.1).tap();   dump("events.root n=6 d=1")
+        at(Slots.eventsAccess.0, Slots.eventsAccess.1).tap();  dump("events.access n=3 d=2")
+        at(cancel.0, cancel.1).tap(); sleep(1)
+
+        at(events.0, events.1).tap(); sleep(1)
+        at(Slots.eventsAirway.0, Slots.eventsAirway.1).tap();  dump("events.airway n=4 d=2")
+        at(cancel.0, cancel.1).tap(); sleep(1)
+
+        at(events.0, events.1).tap(); sleep(1)
+        at(Slots.eventsComms.0, Slots.eventsComms.1).tap();  dump("events.comms n=2 d=2")
+        at(Slots.commsCall.0, Slots.commsCall.1).tap();  dump("events.comms.call n=4 d=3")
+        at(cancel.0, cancel.1).tap(); sleep(1)
+    }
+
+
+    /// v23: the Back pad must actually POP A LEVEL from its new home.
+    ///
+    /// Back moved to screen (32, 32) on 2026-08-29 — the top-left corner,
+    /// which is nineteen points ABOVE the radial layer's box. Drawn inside
+    /// that GeometryReader it would render and then silently refuse every
+    /// touch, because a child outside its parent's bounds is not hit-tested.
+    /// It is drawn in the chrome layer instead. This test is the proof; a
+    /// rendered pad in the accessibility tree is not the same as a live one.
+    ///
+    /// It also lands on top of the Log button. That is fine — and only fine —
+    /// because the pads draw after the radial layer and therefore take the
+    /// touch. If Back ever starts opening the log, this is what catches it.
+    func testWR_backPadPopsALevel() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10)); go.tap()
+        sleep(3)
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        at(Pucks.events.x, Pucks.events.y).tap()        // root fan
+        sleep(2)
+        XCTAssertTrue(ring.staticTexts["ROSC"].waitForExistence(timeout: 4),
+                      "events root fan did not open")
+
+        // Slot 1 of a 6-item fan = Access, a parent, so this descends a level.
+        at(99, 75).tap()
+        sleep(2)
+        XCTAssertTrue(ring.staticTexts["ART LINE"].waitForExistence(timeout: 4),
+                      "Access sub-fan did not open")
+        XCTAssertFalse(ring.staticTexts["ROSC"].exists, "still on the root fan")
+
+        // …and Back returns to it.
+        at(32, 32).tap()
+        sleep(2)
+        XCTAssertTrue(ring.staticTexts["ROSC"].waitForExistence(timeout: 4),
+                      "Back did not pop a level — the pad is rendering but dead")
+        XCTAssertFalse(ring.staticTexts["ART LINE"].exists, "sub-fan is still up")
+
+        // The Log sheet must NOT have opened from the tap landing on it.
+        XCTAssertFalse(ring.buttons["End & review"].exists, "Back opened something else")
+    }
+
+
+    /// v24: picking the pulse check from the Events fan must actually RUN a
+    /// pulse check — the hands-off screen, the cycle closing — not merely log
+    /// a line. Same outcome as tapping the ring (Sebastian, 2026-08-29).
+    ///
+    /// Deliberately exercised straight after START CPR, i.e. long before the
+    /// cycle is due. The ring refuses that (its gate stops a fat-fingered tap
+    /// skipping a cycle); reaching it through a hold and a named bubble is a
+    /// decision, so the fan path is ungated. If someone re-adds that gate,
+    /// this test fails and says why.
+    func testWS_fanPulseCheckOpensTheHandsOffScreen() throws {
+        toWeightPage()
+        ring.buttons["Next"].tap()
+        let go = ring.buttons["GO"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10)); go.tap()
+        sleep(3)
+
+        let f = ring.frame
+        func at(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            ring.coordinate(withNormalizedOffset: CGVector(dx: x / f.width, dy: y / f.height))
+        }
+        at(f.width * 0.5, f.height * 0.46).tap()          // START CPR
+        sleep(3)
+
+        at(Pucks.events.x, Pucks.events.y).tap()
+        sleep(2)
+        XCTAssertTrue(ring.staticTexts["RHYTHM"].waitForExistence(timeout: 4),
+                      "events fan did not open")
+        at(43, 78.5).tap()                                 // slot 0 — the pulse check
+        sleep(2)
+
+        XCTAssertTrue(ring.staticTexts["PULSE CHECK"].waitForExistence(timeout: 5),
+                      "selecting it did not start a pulse check")
+        XCTAssertTrue(ring.buttons["RESUME CPR"].exists || ring.staticTexts["RESUME CPR"].exists,
+                      "hands-off screen is up but has no way out")
+
+        // Resuming closes the cycle and returns to the live screen.
+        let resume = ring.buttons["RESUME CPR"].exists
+            ? ring.buttons["RESUME CPR"] : ring.staticTexts["RESUME CPR"]
+        resume.tap()
+        sleep(3)
+        XCTAssertFalse(ring.staticTexts["PULSE CHECK"].exists, "hands-off screen did not dismiss")
+        XCTAssertTrue(ring.staticTexts["CYCLE 2"].waitForExistence(timeout: 5),
+                      "the cycle did not roll over — the timer was not restarted")
+    }
+
 }

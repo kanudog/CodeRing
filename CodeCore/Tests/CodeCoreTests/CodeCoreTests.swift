@@ -636,39 +636,9 @@ final class TopArcLayoutTests: XCTestCase {
     /// Live GeometryReader on the 45 mm Series 9 (probe-measured 2026-07-23).
     private let bounds = CGSize(width: 194, height: 191)
 
-    /// Anchor pucks as LiveSessionView.anchors() places them: Ø42 at
-    /// 0.15w / 0.5w / 0.85w, sides at h−36 and centre at h−30.
-    private var puckCenters: [CGPoint] {
-        [CGPoint(x: bounds.width * 0.15, y: bounds.height - 36),
-         CGPoint(x: bounds.width * 0.50, y: bounds.height - 30),
-         CGPoint(x: bounds.width * 0.85, y: bounds.height - 36)]
-    }
-
-    func testExitPadsClearTheAnchorPucks() {
-        // Ø34 pad vs Ø42 puck ⇒ centres must stay ≥38 pt apart to not overlap.
-        for pad in [TopArcLayout.cancel(bounds: bounds), TopArcLayout.back(bounds: bounds)] {
-            for puck in puckCenters {
-                let d = hypot(pad.x - puck.x, pad.y - puck.y)
-                XCTAssertGreaterThanOrEqual(
-                    d, 38,
-                    "exit pad at \(pad) overlaps the anchor puck at \(puck) — tapping it "
-                    + "will read as pressing the puck underneath")
-            }
-        }
-    }
-
-    func testExitPadsNeverCollideWithTheArc() {
-        for count in 1...6 {
-            let arc = TopArcLayout.positions(count: count, bounds: bounds)
-            for pad in [TopArcLayout.cancel(bounds: bounds), TopArcLayout.back(bounds: bounds)] {
-                for (i, p) in arc.enumerated() {
-                    XCTAssertGreaterThan(
-                        hypot(pad.x - p.x, pad.y - p.y), 40,
-                        "count \(count): exit pad sits on arc slot \(i)")
-                }
-            }
-        }
-    }
+    // The two exit-pad tests that lived here moved to `FanLayoutTests` when
+    // the pads left fan space for shared SCREEN constants on 2026-08-29.
+    // `TopArcLayout` no longer knows anything about them.
 
     /// Fixed slots are the whole point — a 2-item fan and a 4-item fan must
     /// share pitch and row height so muscle memory survives across fans.
@@ -687,6 +657,236 @@ final class TopArcLayoutTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y), 40,
                                             "count \(count): row-0 slots \(i-1)/\(i) too close")
             }
+        }
+    }
+}
+
+// MARK: - FanLayout
+
+/// The submenu counterpart to `WatchLayoutTests`: the hand-placeable fan
+/// table has to stay on-screen, stay reachable, and — until Sebastian moves
+/// something — stay byte-identical to the top arc it replaced.
+final class FanLayoutTests: XCTestCase {
+
+    private let bounds = FanLayout.bounds
+
+    /// Anchor pucks in SCREEN points — the space the exit pads now live in.
+    private var puckCentres: [CGPoint] {
+        [WatchLayout.medsPuck, WatchLayout.eventsPuck,
+         WatchLayout.fluidsPuck, WatchLayout.shockPuck].map(\.center)
+    }
+
+    private func toScreen(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: p.x + WatchLayout.liveInset.x, y: p.y + WatchLayout.liveInset.y)
+    }
+
+    /// An `.arc(n)` seed must reproduce exactly what the top arc computes.
+    /// Once a fan is hand-placed its `placed` flag turns true and it drops
+    /// out of this check — but never out of the geometry checks below.
+    func testSeededFansStillMatchTheTopArc() {
+        for (key, fan) in FanLayout.table where !fan.placed {
+            let n = fan.slots.count
+            let arc = TopArcLayout.positions(count: n, bounds: bounds)
+            XCTAssertEqual(arc.count, n, "\(key): seed count disagrees with TopArcLayout")
+            for (i, p) in arc.enumerated() {
+                let want = FanLayout.clampBubble(p)
+                XCTAssertEqual(fan.slots[i].center.x, want.x, accuracy: 0.001,
+                               "\(key) slot \(i): seeded x drifted from the top arc")
+                XCTAssertEqual(fan.slots[i].center.y, want.y, accuracy: 0.001,
+                               "\(key) slot \(i): seeded y drifted from the top arc")
+            }
+        }
+    }
+
+    /// Sebastian's rule, 2026-08-29: every label shares its button's x and
+    /// leaves exactly 4 pt between the button's bottom EDGE and the top of
+    /// the label box. Measured from the edge, so it survives a resize.
+    func testLabelsSitFourPointsUnderTheirButton() {
+        for (key, fan) in FanLayout.table where !fan.placed {
+            for (i, s) in fan.slots.enumerated() {
+                XCTAssertEqual(s.label.x, s.center.x, accuracy: 0.001,
+                               "\(key) label \(i) is not centred on its button")
+                let buttonBottom = s.center.y + s.diameter / 2
+                let labelTop = s.label.y - TopArcLayout.labelBoxHeight / 2
+                XCTAssertEqual(labelTop - buttonBottom, TopArcLayout.labelGap, accuracy: 0.001,
+                               "\(key) label \(i): gap under the button is wrong")
+            }
+        }
+    }
+
+    /// Every button is Ø44 with a 25 pt glyph — bubbles, ✕ and Back alike.
+    func testEveryButtonIsTheSameSize() {
+        for (key, fan) in FanLayout.table {
+            for (i, s) in fan.slots.enumerated() {
+                XCTAssertEqual(s.diameter, 44, "\(key) slot \(i) is not Ø44")
+                XCTAssertEqual(s.glyph, 25, "\(key) slot \(i) glyph is not 25 pt")
+            }
+        }
+        for pad in [FanLayout.Pads.cancel, FanLayout.Pads.back] {
+            XCTAssertEqual(pad.diameter, 44, "exit pad is not Ø44")
+            XCTAssertEqual(pad.glyph, 25, "exit pad glyph is not 25 pt")
+        }
+    }
+
+    /// Every bubble fully on screen. A bubble whose rim runs off the edge is
+    /// a leaf that cannot be hit.
+    func testEveryBubbleIsFullyOnScreen() {
+        for (key, fan) in FanLayout.table {
+            for (i, s) in fan.slots.enumerated() {
+                let r = s.diameter / 2
+                XCTAssertGreaterThanOrEqual(s.center.x - r, 0, "\(key) slot \(i) off the left edge")
+                XCTAssertLessThanOrEqual(s.center.x + r, bounds.width, "\(key) slot \(i) off the right edge")
+                XCTAssertGreaterThanOrEqual(s.center.y - r, 0, "\(key) slot \(i) off the top edge")
+                XCTAssertLessThanOrEqual(s.center.y + r, bounds.height, "\(key) slot \(i) off the bottom edge")
+            }
+        }
+    }
+
+    /// Neighbouring bubbles must not overlap — hover flaps between two that
+    /// touch, and on a wrist that reads as "it logged nothing".
+    func testBubblesNeverOverlap() {
+        for (key, fan) in FanLayout.table {
+            for i in fan.slots.indices {
+                for j in fan.slots.indices where j > i {
+                    let a = fan.slots[i], b = fan.slots[j]
+                    XCTAssertGreaterThanOrEqual(
+                        hypot(a.center.x - b.center.x, a.center.y - b.center.y),
+                        (a.diameter + b.diameter) / 2,
+                        "\(key): bubbles \(i) and \(j) overlap")
+                }
+            }
+        }
+    }
+
+    /// Pads MAY overlap the controls beneath them — but only the ones we
+    /// meant. The 2026-08-22 ✕ bug was an overlap where the pad was drawn
+    /// UNDER the puck, so cancel re-opened a fan instead of closing one.
+    /// Now the pads are drawn in the chrome layer, above the radial layer and
+    /// above the scrim, so wherever they overlap they take the touch.
+    ///
+    /// Sebastian put ✕ deliberately in the gap between the Events and Shock
+    /// pucks, which at Ø44 means it clips both — fine, and it reads well on
+    /// screen. Back sits on the Log button for the same reason. This test
+    /// pins that exact set, so a NEW overlap (a puck moving under a pad, say)
+    /// still fails loudly instead of silently becoming a dead control.
+    func testExitPadOverlapsAreExactlyTheDeliberateOnes() {
+        let controls: [(String, CGPoint, CGFloat)] = [
+            ("meds puck", WatchLayout.medsPuck.center, WatchLayout.medsPuck.diameter),
+            ("events puck", WatchLayout.eventsPuck.center, WatchLayout.eventsPuck.diameter),
+            ("fluids puck", WatchLayout.fluidsPuck.center, WatchLayout.fluidsPuck.diameter),
+            ("shock puck", WatchLayout.shockPuck.center, WatchLayout.shockPuck.diameter),
+            ("log", WatchLayout.logButton.center, WatchLayout.logButton.diameter),
+            ("timers", WatchLayout.timersButton.center, WatchLayout.timersButton.diameter),
+            ("mute", WatchLayout.muteButton.center, WatchLayout.muteButton.diameter),
+            ("flag", WatchLayout.flagButton.center, WatchLayout.flagButton.diameter)
+        ]
+        func overlaps(_ pad: FanLayout.Pad) -> Set<String> {
+            Set(controls.filter { _, c, d in
+                hypot(pad.center.x - c.x, pad.center.y - c.y) < (pad.diameter + d) / 2
+            }.map(\.0))
+        }
+        XCTAssertEqual(overlaps(FanLayout.Pads.cancel), ["events puck", "shock puck"],
+                       "✕ now covers a different set of controls than intended")
+        XCTAssertEqual(overlaps(FanLayout.Pads.back), ["log"],
+                       "Back now covers a different set of controls than intended")
+    }
+
+    /// …and never over a bubble, in any fan — the same failure one layer up.
+    func testExitPadsClearEveryBubble() {
+        for (key, fan) in FanLayout.table {
+            for pad in [FanLayout.Pads.cancel, FanLayout.Pads.back] {
+                for (i, s) in fan.slots.enumerated() {
+                    let c = toScreen(s.center)
+                    XCTAssertGreaterThan(
+                        hypot(pad.center.x - c.x, pad.center.y - c.y),
+                        (pad.diameter + s.diameter) / 2,
+                        "\(key): exit pad sits on bubble \(i)")
+                }
+            }
+        }
+    }
+
+    /// Both pads must be fully on the physical screen.
+    func testExitPadsAreOnScreen() {
+        for pad in [FanLayout.Pads.cancel, FanLayout.Pads.back] {
+            let r = pad.diameter / 2
+            XCTAssertGreaterThanOrEqual(pad.center.x - r, 0)
+            XCTAssertGreaterThanOrEqual(pad.center.y - r, 0)
+            XCTAssertLessThanOrEqual(pad.center.x + r, WatchLayout.screen.width)
+            XCTAssertLessThanOrEqual(pad.center.y + r, WatchLayout.screen.height)
+        }
+    }
+
+    /// Labels stay inside the fan box the overlay draws them in.
+    func testLabelsStayOnScreen() {
+        for (key, fan) in FanLayout.table {
+            for (i, s) in fan.slots.enumerated() {
+                XCTAssertGreaterThanOrEqual(s.label.x, 0, "\(key) label \(i) off the left edge")
+                XCTAssertLessThanOrEqual(s.label.x, bounds.width, "\(key) label \(i) off the right edge")
+                XCTAssertGreaterThanOrEqual(s.label.y, 0, "\(key) label \(i) off the top edge")
+                XCTAssertLessThanOrEqual(s.label.y, bounds.height, "\(key) label \(i) off the bottom edge")
+            }
+        }
+    }
+
+    /// A label must never land on another button.
+    ///
+    /// The first version of this test only compared vertical bands and used a
+    /// fixed x tolerance, so it passed while the Bench — which measures the
+    /// real rendered text — showed "SUBSEQUENT · 40 J" clipping the buttons on
+    /// either side of it. Labels are WIDE; a centre label on a three-slot row
+    /// reaches into both neighbours. Estimate the width the same way the
+    /// overlay lays it out: ~0.62 em per character, capped at labelWidth.
+    func testLabelsNeverCoverAnotherButton() {
+        for (key, fan) in FanLayout.table {
+            for (i, lab) in fan.slots.enumerated() {
+                let w = min(lab.labelWidth,
+                            CGFloat(FanLayout.titles[key]?[i].count ?? 10) * lab.labelFont * 0.62) + 8
+                let h = TopArcLayout.labelBoxHeight
+                let l = CGRect(x: lab.label.x - w / 2, y: lab.label.y - h / 2, width: w, height: h)
+                for (j, other) in fan.slots.enumerated() where j != i {
+                    // 1 pt of slack. The Bench measures each label's REAL
+                    // rendered height to apply the 4 pt rule; this test uses
+                    // the app's nominal 13.5. The two disagree by a few
+                    // tenths, which shows up as a hairline touch on a layout
+                    // that is actually correct — five of Sebastian's slots
+                    // land exactly 0.43 pt over. Labels also draw after
+                    // bubbles, so their own background covers the sliver.
+                    // A real collision is points, not tenths.
+                    let b = CGRect(x: other.center.x - other.diameter / 2 + 1,
+                                   y: other.center.y - other.diameter / 2 + 1,
+                                   width: other.diameter - 2, height: other.diameter - 2)
+                    XCTAssertFalse(l.intersects(b),
+                                   "\(key): label \(i) overlaps button \(j)")
+                }
+            }
+        }
+    }
+
+    /// Lookup is count-exact on purpose: the defib ladder and the events fan
+    /// are both built at runtime, and stretching a 6-slot placement over a
+    /// 7-item fan would drop the last item somewhere undefined.
+    func testLookupRefusesACountMismatch() {
+        XCTAssertNotNil(FanLayout.fan("events", count: 6))
+        XCTAssertNil(FanLayout.fan("events", count: 7),
+                     "a custom event was added — that fan must fall back to the computed arc")
+        XCTAssertNil(FanLayout.fan("no.such.fan", count: 3))
+    }
+
+    /// The inventory itself, so a menu-tree edit that changes a fan's size
+    /// fails here instead of silently falling back to the arc on the wrist.
+    func testTableCoversEveryFanAtItsRealCount() {
+        let expected: [String: Int] = [
+            "code": 5, "shock": 2, "support": 5, "events": 6, "events.rosc": 5,
+            "grp:defib": 3, "grp:fluids": 3, "grp:more": 3, "grp:access": 3,
+            "grp:airway": 4, "grp:comms": 2, "grp:temp": 3,
+            "grp:call": 4, "grp:arrival": 4
+        ]
+        XCTAssertEqual(Set(FanLayout.table.keys), Set(expected.keys),
+                       "FanLayout.table and the live menu trees have diverged")
+        for (key, count) in expected {
+            XCTAssertEqual(FanLayout.table[key]?.slots.count, count,
+                           "\(key) should render \(count) items")
         }
     }
 }

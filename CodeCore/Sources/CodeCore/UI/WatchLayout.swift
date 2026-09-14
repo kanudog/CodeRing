@@ -96,8 +96,11 @@ public enum WatchLayout {
 
     // MARK: - Rings and their centre stack
 
-    /// VISUAL extent is 4 pt larger each way than `diameter` — the stroke
-    /// straddles the path. Top edge 67, bottom edge 175.
+    /// VISUAL extent is stroke/2 larger each way than `diameter` — the
+    /// stroke straddles the path. At Ø94 + 8 that is 70 → 172, so space
+    /// things against ±51 from the centre, not ±47.
+    /// (The 67 → 175 figure in the older notes was for the Ø100 ring this
+    /// replaced; it is 4 pt too generous for the ring that actually ships.)
     public static let cprRing  = Ring(99, 121, d: 94, stroke: 8)
     public static let drugRing = Ring(99, 121, d: 80,  stroke: 5)
 
@@ -108,10 +111,10 @@ public enum WatchLayout {
     /// Running. Fixed in both the plain and drug-running states — the old
     /// layout re-centred this block when the drug line appeared.
     ///
-    /// Centred in the 11.3 pt band between the TOTAL row's bottom (55.7) and
-    /// the ring's VISUAL top (67). Note 67, not 71: `Circle().stroke` centres
-    /// an 8 pt line on the path, so the ring reaches 4 pt beyond its 100 pt
-    /// frame. At y 64 the label overlapped that stroke by 2 pt.
+    /// Sits in the band between the TOTAL row's bottom (55.7) and the ring's
+    /// VISUAL top — 70 at today's Ø94, not the 74 its frame suggests:
+    /// `Circle().stroke` centres the 8 pt line on the path, so the ring
+    /// reaches 4 pt beyond its frame. At y 64 the label overlapped it.
     public static let pulseLabel = Label(99, 59.5, w: 138, h: 11, font: 10)
     public static let countdown  = Label(99, 121, w: 53.5, h: 30,   font: 25)
     public static let drugLine   = Label(99, 139, w: 37.5, h: 12,   font: 10)

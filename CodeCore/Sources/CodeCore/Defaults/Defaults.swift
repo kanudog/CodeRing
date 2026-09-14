@@ -53,7 +53,7 @@ public enum Defaults {
                     steps: [DoseStep(label: "Bolus", perKg: 5.0, maxAbsolute: 300)],
                     concentrationMgPerMl: 50,
                     colorHex: CRTheme.medHex,
-                    symbol: "cross.vial.fill",
+                    symbol: "tortoise.fill",
                     notes: "VF/pVT. 5 mg/kg, may repeat ×2 (max 15 mg/kg/day). Demo values.")
     }
 
@@ -92,7 +92,7 @@ public enum Defaults {
                     steps: [DoseStep(label: "Bolus", perKg: 1.0, maxAbsolute: 100)],
                     concentrationMgPerMl: 20,
                     colorHex: CRTheme.medHex,
-                    symbol: "waveform.path.ecg",
+                    symbol: "waveform.slash",
                     notes: "VF/pVT alternative to amiodarone. 1 mg/kg. Demo values.")
     }
 
@@ -148,7 +148,7 @@ public enum Defaults {
                     steps: [DoseStep(label: "CaCl₂", perKg: 20, maxAbsolute: 1000)],
                     concentrationMgPerMl: 100,
                     colorHex: CRTheme.volumeHex,
-                    symbol: "text:Ca",
+                    symbol: "diamond.fill",
                     notes: "20 mg/kg calcium chloride (hyperK, hypoCa, CCB). Demo values.")
     }
 
@@ -159,7 +159,7 @@ public enum Defaults {
                     unit: .mlPerKg,
                     steps: [DoseStep(label: "1 mEq/kg", perKg: 1, maxAbsolute: 50)],
                     colorHex: CRTheme.volumeHex,
-                    symbol: "text:HCO₃",
+                    symbol: "bubbles.and.sparkles.fill",
                     notes: "1 mEq/kg = 1 mL/kg of 8.4%. Demo values.")
     }
 
@@ -171,7 +171,7 @@ public enum Defaults {
                     steps: [DoseStep(label: "Sulfate", perKg: 50, maxAbsolute: 2000)],
                     concentrationMgPerMl: 500,
                     colorHex: CRTheme.volumeHex,
-                    symbol: "text:Mg",
+                    symbol: "hexagon.fill",
                     notes: "Torsades / hypoMg: 25–50 mg/kg (max 2 g). Demo values.")
     }
 

@@ -48,13 +48,22 @@ struct LiveSessionView: View {
                 TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
                     chrome(now: ctx.date)
                 }
+                // Push the live screen out of focus while a fan is up, so the
+                // buttons read as the only thing to act on.
+                .blur(radius: menu.isOpen ? FanLayout.Backdrop.blurRadius : 0)
+                .animation(.easeOut(duration: 0.18), value: menu.isOpen)
 
                 // The radial layer keeps the INSET space its top-arc fans
                 // were tuned in (194 × 191 at 2, 51). Folding it into the
                 // chrome's screen space would move every fan.
                 GeometryReader { live in
                     ZStack {
+                        // Blurred too — they are the closest thing behind the
+                        // fan. `.blur` is a render effect and does not change
+                        // view identity, so the anchor's in-flight LongPress →
+                        // Drag survives it; testWJ/testWK are the proof.
                         anchors(size: live.size)
+                            .blur(radius: menu.isOpen ? FanLayout.Backdrop.blurRadius : 0)
                         RadialMenuOverlay(model: menu)
                             .onChange(of: menu.missedAt) { _, new in
                                 guard new != nil else { return }
@@ -65,6 +74,12 @@ struct LiveSessionView: View {
                 }
                 .padding(.horizontal, WatchLayout.liveInset.x)
                 .padding(.top, WatchLayout.liveInset.y)
+
+                // Exit pads AND the readout chip ride above the radial layer,
+                // in screen points, so they can sit outside the fan box — Back
+                // in the top-left corner, the chip up at y 25. Drawn last so
+                // they are over the scrim.
+                fanChrome
 
                 if let msg = lastLogged {
                     Text(msg)
@@ -610,8 +625,10 @@ struct LiveSessionView: View {
                          radius: 84, bounds: size, tapOnly: tapOnly,
                          model: menu, onSelect: select)
 
-            // Events — VIOLET, bottom-center.
-            RadialAnchor(id: "events",
+            // Events — VIOLET, bottom-center. The id doubles as the
+            // FanLayout key, and the post-ROSC bloom is a different set of
+            // items in a different count, so it gets its own key.
+            RadialAnchor(id: engine.roscAchieved ? "events.rosc" : "events",
                          center: events,
                          symbol: "square.grid.2x2.fill",
                          color: CRTheme.cpr,
@@ -650,6 +667,81 @@ struct LiveSessionView: View {
         }
     }
 
+    // MARK: - Exit pads
+    //
+    // ✕ and Back, in SCREEN points from `FanLayout.Pads`, identical for every
+    // fan at every depth. They live here rather than in `RadialMenuOverlay`
+    // because Back is at (32, 32) — above the radial GeometryReader's box, and
+    // a view outside its parent's bounds never gets a touch.
+    //
+    // Two things that broke these before and must not be undone:
+    //   • `.offset` inside a top-leading ZStack, never `.position`. A
+    //     `.position`'d view expands to fill its parent, so the pad's hit
+    //     region became the whole screen and every tap read as ✕.
+    //   • `Color.clear.allowsHitTesting(false)` to size the stack — plain
+    //     Color.clear is a real touchable surface and swallowed the fan.
+    // They also hit-test in BOTH hold and tap mode; that exemption is safe
+    // only because an in-flight drag is already owned by the anchor's gesture
+    // and both actions are idempotent and log nothing.
+    @ViewBuilder private var fanChrome: some View {
+        if menu.isOpen {
+            ZStack(alignment: .topLeading) {
+                Color.clear.allowsHitTesting(false)
+                if let r = menu.readout { readoutChip(r) }
+                if menu.canGoBack {
+                    padView(FanLayout.Pads.back, symbol: "chevron.backward",
+                            hovering: menu.hoveringBack) { menu.tapBack() }
+                }
+                padView(FanLayout.Pads.cancel, symbol: "xmark",
+                        hovering: menu.hoveringCancel) { menu.tapClose() }
+            }
+        }
+    }
+
+    /// The hovered-item name, big enough to read without looking straight at
+    /// it. Inert — it is a readout, not a control, so it must never take a
+    /// touch away from the bubble it is describing.
+    private func readoutChip(_ r: FanLayout.Readout) -> some View {
+        VStack(spacing: 1) {
+            if let crumb = menu.breadcrumb {
+                Text(crumb.uppercased())
+                    .font(.system(size: r.crumbFont, weight: .heavy, design: .rounded))
+                    .tracking(0.8)
+                    .foregroundStyle(CRTheme.textDim)
+            }
+            Text(menu.hoveredReadoutTitle)
+                .font(.system(size: r.font, weight: .bold, design: .rounded))
+                .foregroundStyle(menu.hoveredReadoutColorHex.map { Color(hex: $0) } ?? CRTheme.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(CRTheme.surfaceHi))
+        .fixedSize()
+        .position(x: r.center.x, y: r.center.y)
+        .allowsHitTesting(false)
+    }
+
+    private func padView(_ pad: FanLayout.Pad, symbol: String, hovering: Bool,
+                         action: @escaping () -> Void) -> some View {
+        ZStack {
+            Circle().fill(hovering ? CRTheme.text : CRTheme.padFill)
+            Circle().strokeBorder(CRTheme.padIcon.opacity(hovering ? 0.9 : 0.35),
+                                  lineWidth: 1.5)
+            Image(systemName: symbol)
+                .font(.system(size: pad.glyph, weight: .heavy))
+                .foregroundStyle(CRTheme.padIcon)
+        }
+        .frame(width: pad.diameter, height: pad.diameter)
+        .contentShape(Circle())
+        .onTapGesture(perform: action)
+        .scaleEffect(hovering ? 1.15 : 1.0)
+        .animation(.spring(duration: 0.15), value: hovering)
+        .offset(x: pad.center.x - pad.diameter / 2,
+                y: pad.center.y - pad.diameter / 2)
+    }
+
     // MARK: - Menu trees
     // Leaf ids encode the action so ONE selector handles every menu:
     //   drug:<uuid>[#step]  → log that drug (auto ladder or forced rung)
@@ -679,10 +771,16 @@ struct LiveSessionView: View {
         var items: [RadialItem] = []
         if let defib {
             let doses = DoseCalculator.doses(for: defib, weightKg: engine.session.patient.weightKg)
+            // "Subsequent · 40 J" is 17 characters. As a bubble caption that
+            // renders 82 pt wide — wider than the 60 pt slot pitch — so it
+            // reached into the buttons on either side, and no pitch that fits
+            // the fan box could clear it. Shortened for DISPLAY only; the id,
+            // the dose and everything logged are untouched.
             let steps = doses.enumerated().map { i, d in
-                RadialItem(id: "drug:\(defib.id.uuidString)#\(i)",
-                           title: "\(d.stepLabel) · \(d.amountText)",
-                           symbol: "bolt.fill", colorHex: CRTheme.shockHex)
+                let rung = d.stepLabel == "Subsequent" ? "Next" : d.stepLabel
+                return RadialItem(id: "drug:\(defib.id.uuidString)#\(i)",
+                                  title: "\(rung) \(d.amountText)",
+                                  symbol: "bolt.fill", colorHex: CRTheme.shockHex)
             }
             items.append(RadialItem(id: "grp:defib", title: "Defib", symbol: "bolt.fill",
                                     colorHex: CRTheme.shockHex, children: steps))
@@ -705,8 +803,12 @@ struct LiveSessionView: View {
         ]
         if let f = drug(Defaults.fluidsID) {
             for (i, d) in DoseCalculator.doses(for: f, weightKg: engine.session.patient.weightKg).enumerated() {
+                // Half-full for the 10 mL/kg rung, full for 20 — the two used
+                // to be the same glyph, distinguishable only by their label.
                 fluidKids.append(RadialItem(id: "drug:\(f.id.uuidString)#\(i)",
-                                            title: d.stepLabel, symbol: "drop.fill", colorHex: blue))
+                                            title: d.stepLabel,
+                                            symbol: i == 0 ? "drop.halffull" : "drop.fill",
+                                            colorHex: blue))
             }
         }
         var more: [RadialItem] = [
@@ -724,7 +826,17 @@ struct LiveSessionView: View {
         return items.reversed()
     }
 
-    private let commsServices = ["Surgery", "Anesthesia", "ECMO", "Consult"]
+    /// Service → its own icon. These used to inherit a single symbol from the
+    /// branch (a phone for every Call, a walker for every Arrival), so four
+    /// identical bubbles sat side by side and only the label told them apart.
+    /// Anesthesia has no laryngoscope in SF Symbols — `moon.zzz.fill` is the
+    /// honest generic for "the people who put them to sleep".
+    private let commsServices: [(name: String, symbol: String)] = [
+        ("Surgery", "scissors"),
+        ("Anesthesia", "moon.zzz.fill"),
+        ("ECMO", "arrow.triangle.2.circlepath"),
+        ("Consult", "stethoscope")
+    ]
 
     private func tempParent() -> RadialItem {
         let teal = CRTheme.careHex
@@ -758,20 +870,23 @@ struct LiveSessionView: View {
         // Airway → intubation / bag / mask / trach
         items.append(RadialItem(id: "grp:airway", title: "Airway",
                                 symbol: "lungs.fill", colorHex: airway, children: [
-            RadialItem(id: "evt:airway.ett", title: "Intubation", symbol: "lungs.fill", colorHex: airway),
-            RadialItem(id: "evt:airway.bag", title: "Bag", symbol: "text:BVM", colorHex: airway),
+            RadialItem(id: "evt:airway.ett", title: "Intubation", symbol: "arrow.down.to.line.compact", colorHex: airway),
+            RadialItem(id: "evt:airway.bag", title: "Bag", symbol: "balloon.fill", colorHex: airway),
             RadialItem(id: "evt:airway.mask", title: "Mask", symbol: "facemask.fill", colorHex: airway),
-            RadialItem(id: "evt:airway.trach", title: "Trach", symbol: "text:TRACH", colorHex: airway)
+            RadialItem(id: "evt:airway.trach", title: "Trach", symbol: "cylinder.fill", colorHex: airway)
         ]))
 
         // Comms → Call / Arrival → service (two levels deep)
-        func services(_ base: String, _ sym: String) -> [RadialItem] {
-            commsServices.map { RadialItem(id: "evt:\(base)|\($0)", title: $0, symbol: sym, colorHex: comms) }
+        func services(_ base: String, _ fallback: String) -> [RadialItem] {
+            commsServices.map {
+                RadialItem(id: "evt:\(base)|\($0.name)", title: $0.name,
+                           symbol: $0.symbol, colorHex: comms)
+            }
         }
         items.append(RadialItem(id: "grp:comms", title: "Comms",
                                 symbol: "person.2.wave.2.fill", colorHex: comms, children: [
             RadialItem(id: "grp:call", title: "Call", symbol: "phone.fill", colorHex: comms, children: services("comms.call", "phone.fill")),
-            RadialItem(id: "grp:arrival", title: "Arrival", symbol: "figure.walk.arrival", colorHex: comms, children: services("comms.arrival", "figure.walk"))
+            RadialItem(id: "grp:arrival", title: "Arrived", symbol: "figure.walk.arrival", colorHex: comms, children: services("comms.arrival", "figure.walk"))
         ]))
 
         items.append(tempParent())
@@ -788,7 +903,11 @@ struct LiveSessionView: View {
     private func roscEventsItems() -> [RadialItem] {
         let blue = CRTheme.volumeHex
         return [
-            RadialItem(id: "evt:rhythm", title: "Rhythm", symbol: "waveform.path.ecg", colorHex: CRTheme.rhythmHex),
+            // "Pulse" post-ROSC, "Rhythm" during the arrest — same event, but
+            // once there is a rhythm the question on the wrist is whether it
+            // still has a pulse. The LOGGED title is unchanged either way;
+            // `eventCatalog["rhythm"]` still writes "Rhythm check".
+            RadialItem(id: "evt:rhythm", title: "Pulse", symbol: "waveform.path.ecg", colorHex: CRTheme.rhythmHex),
             RadialItem(id: "evt:12lead", title: "12-lead", symbol: "waveform.path.ecg.rectangle", colorHex: CRTheme.rhythmHex),
             RadialItem(id: "evt:drip", title: "Drip", symbol: "ivfluid.bag", colorHex: blue),
             RadialItem(id: "evt:blood", title: "Blood", symbol: "drop.fill", colorHex: blue,
@@ -805,7 +924,7 @@ struct LiveSessionView: View {
     /// rides in the leaf id after "|".
     private var eventCatalog: [String: EvtMeta] {
         [
-            "rhythm":         .init(title: "Rhythm check", category: .rhythm, colorHex: CRTheme.rhythmHex),
+            "rhythm":         .init(title: "Pulse check", category: .rhythm, colorHex: CRTheme.rhythmHex),
             "12lead":         .init(title: "12-lead ECG", category: .rhythm, colorHex: CRTheme.rhythmHex),
             "access.iv":      .init(title: "IV access", category: .access, colorHex: CRTheme.accessHex),
             "access.io":      .init(title: "IO access", category: .access, colorHex: CRTheme.accessHex),
@@ -850,6 +969,30 @@ struct LiveSessionView: View {
             let segs = id.dropFirst(4).split(separator: "|", maxSplits: 1).map(String.init)
             let base = segs[0]
             let detail = segs.count > 1 ? segs[1] : nil
+
+            // Picking the pulse check from the fan IS a pulse check — it opens
+            // the hands-off screen and closes the cycle, exactly as tapping the
+            // ring does (Sebastian, 2026-08-29). `beginPulseCheck` writes its
+            // own "Pulse check" entry, so this must NOT also log the catalog
+            // event or the sheet shows it twice.
+            //
+            // Deliberately NOT gated on due/overdue the way the ring is. That
+            // gate protects against a fat-fingered tap on a big target in the
+            // middle of the screen; reaching this took a hold and a slide onto
+            // a named bubble. A rhythm change mid-cycle is a real reason to
+            // check early, and a menu item that silently does nothing is this
+            // app's worst failure mode.
+            //
+            // The engine's own guards still apply. Post-ROSC — where this item
+            // is called "Pulse" — they refuse, and it falls through to logging
+            // the event, which is what you want once there is a rhythm.
+            if base == "rhythm", engine.cprStarted, !engine.roscAchieved,
+               !engine.isPaused, !engine.isInPulseCheck {
+                engine.beginPulseCheck()
+                WatchHaptics.play(.notification)
+                flashLast()
+                return
+            }
             if let meta = eventCatalog[base] {
                 engine.logEvent(title: meta.title, detail: detail, category: meta.category,
                                 definitionID: base, colorHex: meta.colorHex)

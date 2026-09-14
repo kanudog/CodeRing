@@ -50,11 +50,14 @@ final class RadialMenuModel {
     /// and the focus center that level was fanned around.
     private struct Level {
         let items: [RadialItem]
-        let backPos: CGPoint?
-        let cancelPos: CGPoint
         let breadcrumb: String?
+        let levelTitle: String
         let layout: RadialLayout
         let fixedPos: [Int: CGPoint]
+        /// Hand-placed geometry for THAT level, or nil if it was on the
+        /// computed arc. Popping has to restore sizes and label positions,
+        /// not just centres.
+        let fan: FanLayout.Fan?
     }
 
     var isOpen = false
@@ -67,12 +70,20 @@ final class RadialMenuModel {
     var hoveredID: String? = nil
     var hoveringCancel = false         // finger over the ✕ pad
     var hoveringBack = false           // finger over the back chevron pad
-    var breadcrumb: String? = nil      // parent title while in a sub-arc
-    /// Drag here to pop a level — sits opposite the fan from the finger.
-    private(set) var backPos: CGPoint? = nil
-    /// Drag here to bail out entirely — beyond the back pad on the same line
-    /// (the root puck itself at level 0).
-    private(set) var cancelPos: CGPoint = .zero
+    var breadcrumb: String? = nil      // the fan we came FROM, small line
+    /// This fan's own name, the chip's big line: "MEDS" at the root, the
+    /// parent item's title once nested ("EVENTS" over "Temp").
+    private(set) var levelTitle: String = ""
+    /// The two exit pads, in FAN space, converted from the shared screen
+    /// constants. Computed rather than stored: they are the same two points
+    /// for every fan at every depth, so there was nothing to remember.
+    /// Back appears only when there IS a level to pop back to.
+    var cancelPos: CGPoint { WatchLayout.toLive(FanLayout.Pads.cancel.center) }
+    var backPos: CGPoint? {
+        stack.isEmpty ? nil : WatchLayout.toLive(FanLayout.Pads.back.center)
+    }
+    /// Drives whether the chrome layer draws the Back pad at all.
+    var canGoBack: Bool { !stack.isEmpty }
 
     private(set) var items: [RadialItem] = []
     /// Stamped when a fan closes without firing a leaf. Silence after a
@@ -80,8 +91,12 @@ final class RadialMenuModel {
     /// mode — the wearer believes an intervention was logged when it wasn't
     /// — so the live screen watches this and says so out loud.
     private(set) var missedAt: Date? = nil
-    /// Hand-placed positions (FanLayoutOverrides) — beat the fitted arc.
+    /// Hand-placed positions — beat the fitted arc.
     private var fixedPos: [Int: CGPoint] = [:]
+    /// The CURRENT level's entry in `FanLayout.table`, when one exists for
+    /// this key at this item count. nil ⇒ everything falls back to the
+    /// computed top arc, which is what every fan did before the table.
+    private(set) var fan: FanLayout.Fan? = nil
     /// Geometry for the CURRENT level. Its anchor is the "focus center":
     /// the root puck at level 0, then the tapped item's position at every
     /// deeper level — so the fan always grows around the finger.
@@ -107,17 +122,14 @@ final class RadialMenuModel {
         self.onSelect = onSelect
         self.hoveredID = nil
         self.breadcrumb = nil
-        self.backPos = nil
-        self.cancelPos = anchor
+        self.levelTitle = key.flatMap { FanLayout.fanTitle[$0] } ?? ""
         self.stack = []
         self.lastLocation = nil
-        // Every fan blooms into the SAME top arc — fixed slots the wearer
-        // can learn, kept well clear of the occluded lower-right quadrant.
-        self.fixedPos = [:]
-        for (i, p) in TopArcLayout.positions(count: items.count, bounds: bounds).enumerated() {
-            fixedPos[i] = clampToScreen(p)
-        }
-        self.cancelPos = clampToScreen(TopArcLayout.cancel(bounds: bounds))
+        // Hand-placed geometry first (FanLayout, keyed by the anchor id);
+        // otherwise every fan blooms into the SAME top arc — fixed slots the
+        // wearer can learn, clear of the occluded lower-right quadrant.
+        self.fan = key.flatMap { FanLayout.fan($0, count: items.count) }
+        self.fixedPos = slotCentres(count: items.count, bounds: bounds)
         self.openedAt = Date()
         self.isOpen = true
         WatchHaptics.play(.start)
@@ -140,14 +152,74 @@ final class RadialMenuModel {
         hoveringCancel = false
         hoveringBack = false
         breadcrumb = nil
-        backPos = nil
+        levelTitle = ""
         stack = []
         lastLocation = nil
         fixedPos = [:]
+        fan = nil
         onSelect = nil
     }
 
     // MARK: - Geometry (delegated to CodeCore's unit-tested RadialLayout)
+
+    /// Bubble centres for the level being opened: the hand-placed table when
+    /// it has an entry at this exact count, the computed arc otherwise.
+    private func slotCentres(count: Int, bounds: CGSize) -> [Int: CGPoint] {
+        var out: [Int: CGPoint] = [:]
+        if let fan {
+            for (i, s) in fan.slots.enumerated() { out[i] = s.center }
+            return out
+        }
+        for (i, p) in TopArcLayout.positions(count: count, bounds: bounds).enumerated() {
+            out[i] = clampToScreen(p)
+        }
+        return out
+    }
+
+    /// Bounds-checked because `items` and `fan.slots` are matched on count at
+    /// lookup time but the view re-renders during the close animation, when
+    /// one has already emptied and the other has not.
+    private func slot(_ i: Int) -> FanLayout.Slot? {
+        guard let fan, fan.slots.indices.contains(i) else { return nil }
+        return fan.slots[i]
+    }
+
+    /// Per-slot appearance. All five fall back to the values the overlay used
+    /// to hard-code, so an unplaced fan renders exactly as it always did.
+    func slotDiameter(_ i: Int) -> CGFloat { slot(i)?.diameter ?? 38 }
+    func slotGlyph(_ i: Int) -> CGFloat { slot(i)?.glyph ?? 15 }
+    func labelFont(_ i: Int) -> CGFloat { slot(i)?.labelFont ?? 8.5 }
+    func labelWidth(_ i: Int) -> CGFloat { slot(i)?.labelWidth ?? 74 }
+    func slotZ(_ i: Int) -> Int { slot(i)?.z ?? i }
+
+    /// A seeded fan keeps the old rule — the chip dodges to the side away
+    /// from the puck that opened the fan. A hand-placed one pins its x.
+    /// The readout chip's slot in SCREEN points, or nil when this fan has no
+    /// chip. A seeded fan still follows the old rule (dodge to the side away
+    /// from the puck that opened it); a placed one is pinned.
+    var readout: FanLayout.Readout? {
+        guard let fan else {
+            return FanLayout.Readout(rootAnchor.x < 100 ? 112 : 92,
+                                     FanLayout.bounds.height - 16 + WatchLayout.liveInset.y)
+        }
+        guard let r = fan.readout else { return nil }
+        guard r.followAnchor else { return r }
+        return FanLayout.Readout(rootAnchor.x < 100 ? 112 : 92, r.center.y,
+                                 font: r.font, crumbFont: r.crumbFont)
+    }
+    /// The chip's big line. The FAN's name by default — never "Tap to log"
+    /// again — but the hovered item's name while a finger is actually on one.
+    /// That readout is the only confirmation of what a hold-drag is about to
+    /// fire, and silently firing the wrong thing is this app's worst failure.
+    var hoveredReadoutTitle: String {
+        if hoveringCancel { return "Release to cancel" }
+        if hoveringBack { return "Back" }
+        return items.first { $0.id == hoveredID }?.title ?? levelTitle
+    }
+    var hoveredReadoutColorHex: String? {
+        if hoveringCancel || hoveringBack { return nil }
+        return items.first { $0.id == hoveredID }?.colorHex
+    }
 
     func angle(forIndex i: Int, count: Int) -> Double {
         layout.angle(forIndex: i, count: count)
@@ -158,10 +230,13 @@ final class RadialMenuModel {
     }
 
     func labelPosition(forIndex i: Int, count: Int) -> CGPoint {
-        // Fixed arc ⇒ fixed labels: straight below the bubble. The old
-        // outward/stacked search existed to dodge neighbours in a fitted
-        // arc; slots here are pitched wide enough that it can't happen.
-        TopArcLayout.labelPosition(for: position(forIndex: i, count: count))
+        // Hand-placed labels are absolute — the whole point is being able to
+        // pull one out from under a crowded neighbour. Otherwise: fixed arc
+        // ⇒ fixed labels, straight below the bubble. The old outward/stacked
+        // search existed to dodge neighbours in a FITTED arc; slots here are
+        // pitched wide enough that it can't happen.
+        if let s = slot(i) { return s.label }
+        return TopArcLayout.labelPosition(for: position(forIndex: i, count: count))
     }
 
     // MARK: - Hold-drag flow
@@ -171,7 +246,7 @@ final class RadialMenuModel {
         lastLocation = location
 
         // Finger over the ✕ pad = armed to cancel everything.
-        if distance(location, cancelPos) <= 26 {
+        if distance(location, cancelPos) <= FanLayout.Pads.hoverRadius {
             if !hoveringCancel {
                 hoveringCancel = true
                 WatchHaptics.play(.click)
@@ -261,9 +336,12 @@ final class RadialMenuModel {
         // children never pile into an edge or under other elements.
         let open = RadialLayout.openSpaceDirection(from: parentPos, bounds: layout.bounds)
 
-        stack.append(Level(items: items, backPos: backPos, cancelPos: cancelPos,
-                           breadcrumb: breadcrumb, layout: layout, fixedPos: fixedPos))
-        breadcrumb = parent.title
+        stack.append(Level(items: items, breadcrumb: breadcrumb, levelTitle: levelTitle,
+                           layout: layout, fixedPos: fixedPos, fan: fan))
+        // The trail reads previous-over-current: EVENTS above Temp, then
+        // COMMS above Call one level deeper.
+        breadcrumb = levelTitle
+        levelTitle = FanLayout.fanTitle[parent.id] ?? parent.title
         items = children
         hoveredID = nil
         layout.anchor = parentPos
@@ -272,16 +350,13 @@ final class RadialMenuModel {
         layout.fit(count: children.count, preferredCenter: open,
                    startRadius: 56, radiusCap: 72)
 
-        // Children take over the very same arc the parent occupied, and the
-        // two exit pads never move — depth changes the CONTENTS of the arc,
-        // never its geometry.
-        fixedPos = [:]
-        for (i, p) in TopArcLayout.positions(count: children.count,
-                                             bounds: layout.bounds).enumerated() {
-            fixedPos[i] = clampToScreen(p)
-        }
-        backPos = clampToScreen(TopArcLayout.back(bounds: layout.bounds))
-        cancelPos = clampToScreen(TopArcLayout.cancel(bounds: layout.bounds))
+        // A nested fan is keyed by the PARENT item's id ("grp:airway", …),
+        // so each sub-menu can be placed independently of the fan it came
+        // from. Unplaced, children take over the very same arc the parent
+        // occupied and the two exit pads never move — depth changes the
+        // CONTENTS of the arc, never its geometry.
+        fan = FanLayout.fan(parent.id, count: children.count)
+        fixedPos = slotCentres(count: children.count, bounds: layout.bounds)
         WatchHaptics.play(.success)        // the "pop" that ends the dwell ramp
     }
 
@@ -291,11 +366,11 @@ final class RadialMenuModel {
         dwellTask?.cancel()
         dwellTask = nil
         items = level.items
-        backPos = level.backPos
-        cancelPos = level.cancelPos
         breadcrumb = level.breadcrumb
+        levelTitle = level.levelTitle
         layout = level.layout
         fixedPos = level.fixedPos
+        fan = level.fan
         hoveredID = nil
         hoveringBack = false
         WatchHaptics.play(.directionDown)
@@ -450,7 +525,17 @@ struct RadialMenuOverlay: View {
     private func overlayContent(size: CGSize) -> some View {
         ZStack {
             if model.isOpen {
-                Color.black.opacity(0.62)
+                // The wash. The BLUR lives on the layers behind this, in
+                // LiveSessionView — `.ultraThinMaterial` here made the whole
+                // overlay render as nothing on watchOS (buttons still in the
+                // accessibility tree, not a pixel on screen).
+                //
+                // Two layers on purpose: dim, then lift off black. A flat
+                // black 0.62 sank the backdrop and the dark bubbles to nearly
+                // the same value, which is what made the fans hard to read.
+                Rectangle()
+                    .fill(Color.black.opacity(FanLayout.Backdrop.dim))
+                    .overlay(CRTheme.scrimTint.opacity(FanLayout.Backdrop.tint))
                     .ignoresSafeArea()
                     .onTapGesture { model.close() }
                     // The one element that MUST NOT hit-test in hold mode: it
@@ -458,10 +543,13 @@ struct RadialMenuOverlay: View {
                     // the instant a fan opened.
                     .allowsHitTesting(model.tapMode)
 
-                // Item bubbles
+                // Item bubbles. zIndex is explicit so a hand-placed fan can
+                // decide what covers what when two bubbles are deliberately
+                // overlapped; unplaced fans get index order, as before.
                 ForEach(Array(model.items.enumerated()), id: \.element.id) { i, item in
-                    bubble(item)
+                    bubble(item, index: i)
                         .position(model.position(forIndex: i, count: model.items.count))
+                        .zIndex(Double(model.slotZ(i)))
                         .transition(.scale.combined(with: .opacity))
                 }
 
@@ -474,7 +562,7 @@ struct RadialMenuOverlay: View {
                     let hovered = model.hoveredID == item.id
                     let p = model.labelPosition(forIndex: i, count: model.items.count)
                     Text(item.title.uppercased())
-                        .font(.system(size: 8.5, weight: .heavy, design: .rounded))
+                        .font(.system(size: model.labelFont(i), weight: .heavy, design: .rounded))
                         .tracking(0.3)
                         .foregroundStyle(hovered ? item.color : CRTheme.text)
                         .lineLimit(2)
@@ -484,34 +572,21 @@ struct RadialMenuOverlay: View {
                         .background(RoundedRectangle(cornerRadius: 5).fill(CRTheme.bg.opacity(0.72)))
                         // Cap wrap width AFTER the background so the fill hugs
                         // the glyphs instead of stretching to the cap.
-                        .frame(maxWidth: 74)
-                        .position(x: min(max(p.x, 32), size.width - 32),
-                                  y: max(10, p.y))
+                        .frame(maxWidth: model.labelWidth(i))
+                        // A hand-placed label is already where it was put —
+                        // clamping it again would quietly undo the placement.
+                        // Seeded fans keep the clamp that produced their seed.
+                        .position(model.fan == nil
+                                  ? CGPoint(x: min(max(p.x, 32), size.width - 32), y: max(10, p.y))
+                                  : p)
                         .allowsHitTesting(false)
                 }
 
                 // Readout chip — the hovered item's name, big and glanceable
-                VStack(spacing: 1) {
-                    if let crumb = model.breadcrumb {
-                        Text(crumb.uppercased())
-                            .font(.system(size: 9, weight: .heavy, design: .rounded))
-                            .tracking(0.8)
-                            .foregroundStyle(CRTheme.textDim)
-                    }
-                    Text(hoveredTitle)
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundStyle(hoveredColor)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .background(Capsule().fill(CRTheme.surfaceHi))
-                .frame(maxWidth: .infinity)
-                // The chip dodges the arc: top by default, bottom whenever
-                // bubbles climb high enough that it would sit on their labels.
-                .position(x: model.rootAnchor.x < 100 ? 110 : 90,
-                          y: readoutAtBottom(size) ? size.height - 16 : 24)
+                // The readout chip moved to `LiveSessionView.fanChrome` —
+                // Sebastian's placement puts it at screen y 25, which is above
+                // this layer's box, and it is optional per fan (removed from
+                // Meds and Fluids).
             }
         }
         .animation(.spring(duration: 0.22), value: model.isOpen)
@@ -522,81 +597,15 @@ struct RadialMenuOverlay: View {
         // (below), which is the narrow fix. Everything else in here is
         // frame-sized and cannot intercept beyond its own bounds.
         .allowsHitTesting(model.isOpen)
-        .overlay { exitPads }
     }
 
-    /// Back and ✕ live OUTSIDE the tap-mode hit-testing gate.
-    ///
-    /// They used to inherit it, which made them dead in hold mode: the tap
-    /// fell straight through to whatever anchor puck happened to be behind
-    /// (the meds puck, for ✕), so pressing cancel re-opened a fan instead of
-    /// closing one. Safe to exempt — an in-flight drag is already owned by
-    /// the anchor's gesture and cannot be reassigned, so hold-drag-release is
-    /// untouched; these only claim a NEW touch. Both are idempotent and log
-    /// nothing, which is why they are the only elements allowed through.
-    /// Back and ✕ live OUTSIDE the tap-mode hit-testing gate.
-    ///
-    /// They used to inherit it, which made them dead in hold mode: the tap
-    /// fell through to whatever anchor puck was behind (the meds puck, for ✕),
-    /// so cancelling re-opened a fan instead of closing one. Safe to exempt —
-    /// an in-flight drag is already owned by the anchor's gesture and cannot
-    /// be reassigned, and both actions are idempotent and log nothing.
-    ///
-    /// Placed with .offset, NOT .position: a .position'd view expands to fill
-    /// its parent, so these pads covered the whole screen and swallowed every
-    /// bubble touch. Keeping each pad's layout size equal to its own 44 pt
-    /// frame is what confines hit-testing to the pad itself.
-    @ViewBuilder private var exitPads: some View {
-        if model.isOpen {
-            ZStack(alignment: .topLeading) {
-                // Sizes the stack to the whole overlay so .offset is measured
-                // from the top-left. MUST NOT hit-test: Color.clear is a real,
-                // touchable surface in SwiftUI (unlike genuinely empty space),
-                // and it silently swallowed every fan touch — the anchor's
-                // drag was cancelled the instant a fan opened, so no bubble
-                // could ever be hovered or fired.
-                Color.clear.allowsHitTesting(false)
-                if let back = model.backPos {
-                    pad(symbol: "chevron.backward",
-                        hovering: model.hoveringBack,
-                        fill: CRTheme.surface.opacity(0.7),
-                        at: back) { model.tapBack() }
-                }
-                pad(symbol: "xmark",
-                    hovering: model.hoveringCancel,
-                    fill: CRTheme.surface.opacity(0.85),
-                    at: model.cancelPos) { model.tapClose() }
-            }
-        }
-    }
-
-    /// One 44 pt exit pad, centred on `at` via offset so its layout footprint
-    /// stays 44 pt (see the note on exitPads).
-    private func pad(symbol: String, hovering: Bool, fill: Color,
-                     at point: CGPoint, action: @escaping () -> Void) -> some View {
-        let side: CGFloat = 44
-        return ZStack {
-            Circle().fill(hovering ? CRTheme.surfaceHi : fill)
-            Circle().strokeBorder(.white.opacity(hovering ? 0.8 : 0.35), lineWidth: 1.5)
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .heavy))
-                .foregroundStyle(hovering ? CRTheme.text : CRTheme.textDim)
-        }
-        .frame(width: side, height: side)
-        .contentShape(Circle())
-        .onTapGesture(perform: action)
-        .scaleEffect(hovering ? 1.15 : 1.0)
-        .animation(.spring(duration: 0.15), value: hovering)
-        .offset(x: point.x - side / 2, y: point.y - side / 2)
-    }
-
-    /// True when any bubble (or its outward label) reaches the top band.
-    private func readoutAtBottom(_ size: CGSize) -> Bool {
-        let n = model.items.count
-        guard n > 0 else { return false }
-        let highest = (0..<n).map { model.position(forIndex: $0, count: n).y }.min() ?? 999
-        return highest < 78
-    }
+    // The exit pads used to be an `.overlay { exitPads }` right here, inside
+    // the fan's GeometryReader. They are drawn by `LiveSessionView.exitPads`
+    // in SCREEN space now — Back sits at (32, 32), nineteen points above this
+    // layer's box, and a child positioned outside its parent's bounds never
+    // receives a touch. Everything that made them work is preserved there:
+    // `.offset` inside a top-leading ZStack (never `.position`, which would
+    // expand to fill and swallow the screen), and hit-testing in BOTH modes.
 
     private var hoveredTitle: String {
         if model.hoveringCancel { return "Release to cancel" }
@@ -611,7 +620,7 @@ struct RadialMenuOverlay: View {
     }
 
     @ViewBuilder
-    private func bubble(_ item: RadialItem) -> some View {
+    private func bubble(_ item: RadialItem, index: Int) -> some View {
         let hovered = model.hoveredID == item.id
         // Icon color: explicit override wins (blood's red drop stays red on
         // the hover fill too); otherwise item color, inverting on hover.
@@ -626,25 +635,27 @@ struct RadialMenuOverlay: View {
             if item.symbol.hasPrefix("text:") {
                 // Element abbreviations (Ca, Mg, HCO₃) render as type — same
                 // weight family as the SF icons so they read as siblings.
+                // Kept a fixed 3 pt under the icon size the way it shipped.
                 Text(item.symbol.dropFirst(5))
-                    .font(.system(size: 12, weight: .heavy, design: .rounded))
+                    .font(.system(size: model.slotGlyph(index) - 3, weight: .heavy, design: .rounded))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                    .frame(width: 30)
+                    .frame(width: model.slotDiameter(index) - 8)
                     .foregroundStyle(iconColor)
             } else {
                 Image(systemName: item.symbol)
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: model.slotGlyph(index), weight: .bold))
                     .foregroundStyle(iconColor)
             }
             if item.children != nil {
                 Circle()
                     .fill(item.color)
                     .frame(width: 6, height: 6)
-                    .offset(y: 16)   // "has more" dot
+                    // "has more" dot, pinned just inside the rim
+                    .offset(y: model.slotDiameter(index) / 2 - 3)
             }
         }
-        .frame(width: 38, height: 38)
+        .frame(width: model.slotDiameter(index), height: model.slotDiameter(index))
         .scaleEffect(hovered ? 1.28 : 1.0)
         .animation(.spring(duration: 0.15), value: hovered)
 

@@ -41,6 +41,15 @@ public enum CRTheme {
     public static let customHex = "F0ABFC"       // user-defined — pink
     public static let demoHex = "FFB020"         // demo badge — amber
     public static let pauseHex = "FBCB89"        // pause control — warm sand (Sebastian, 2026-08-28)
+    // Exit pads (✕ and back). Deliberately NOT a menu colour: these two are
+    // the controls that must read as "not an option" at a glance, so they
+    // invert — pale fill, dark red glyph — against every fan's dark bubbles.
+    public static let padFillHex = "D9DCE3"      // Sebastian, 2026-08-29
+    public static let padIconHex = "B51737"
+    /// Wash laid over the blurred backdrop while a fan is open. Lifts the
+    /// scrim off pure black so the dark bubbles read against it, instead of
+    /// the old flat black 0.62 that sank everything to the same value.
+    public static let scrimTintHex = "8FA0C8"
 
     public static var bg: Color { Color(hex: bgHex) }
     public static var surface: Color { Color(hex: surfaceHex) }
@@ -61,6 +70,9 @@ public enum CRTheme {
     public static var comms: Color { Color(hex: commsHex) }
     public static var custom: Color { Color(hex: customHex) }
     public static var demo: Color { Color(hex: demoHex) }
+    public static var padFill: Color { Color(hex: padFillHex) }
+    public static var padIcon: Color { Color(hex: padIconHex) }
+    public static var scrimTint: Color { Color(hex: scrimTintHex) }
 }
 
 /// mm:ss formatting used on every timer surface.

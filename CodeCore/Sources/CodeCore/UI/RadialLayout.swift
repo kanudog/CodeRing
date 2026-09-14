@@ -281,20 +281,47 @@ public enum FanLayoutOverrides {
 /// kept only as the record of the 2026-07 hand placement.
 public enum TopArcLayout {
 
-    /// Bubble Ø38 + 6 pt of air. Also the minimum comfortable touch pitch.
-    public static let slotPitch: CGFloat = 44
+    /// Bubble Ø44 + air. Buttons are not what sets this — LABELS are. A
+    /// centre label like "SUBSEQUENT · 40 J" is far wider than its own
+    /// button and reaches into the ones either side, so the pitch has to
+    /// clear the widest caption, not the widest button. 44 → 56 → 60.
+    public static let slotPitch: CGFloat = 60
     /// First row's center y, in fan space (the live GeometryReader).
-    public static let apexY: CGFloat = 26
-    /// Second row sits a full label-height below the first.
-    public static let rowGap: CGFloat = 52
+    public static let apexY: CGFloat = 24
+    /// Second row clears the first row's LABELS, not just its buttons.
+    ///
+    /// The floor is d/2 + labelGap + labelHeight + d/2 = 22 + 4 + 13.5 + 22 =
+    /// 61.5 at Ø44 — but `rowGap` is centre-to-centre BEFORE the arc drop,
+    /// and the drop is not equal on both rows. On a 3 + 2 fan the outer top
+    /// slot falls 6.1 pt while the row below it falls only 1.5, so the real
+    /// vertical gap is ~4.6 pt tighter than this number. 66 cleared by 0.1 pt
+    /// — arithmetically "fine", visually touching. 72 clears by ~6.
+    ///
+    /// It was 52 (sized for Ø38 with the label tucked closer), which put
+    /// "INTUBATION" straight through the top of the button below it.
+    public static let rowGap: CGFloat = 66
     /// The arc's ends drop this far below its center — the "slight curve".
-    public static let arcDrop: CGFloat = 13
+    /// Was 13. At Ø44 the drop is charged twice: it pushes the outer buttons
+    /// down AND drags their labels with them, which is what made a 3 + 2 fan
+    /// collide no matter how far the rows were pushed apart. 6 keeps a
+    /// visible curve while giving the vertical budget back.
+    public static let arcDrop: CGFloat = 6
     /// Bubble centers never come closer than this to a side edge.
     public static let sideInset: CGFloat = 24
     /// Above this count a fan needs a second row.
-    public static let maxPerRow = 4
-    /// Labels always hang directly below their own bubble.
-    public static let labelDrop: CGFloat = 25
+    ///
+    /// Three, not four, since the Ø44 buttons: four across at a 50 pt pitch
+    /// spans 150 + 44 = 194 pt, which is the fan box EXACTLY — no margin at
+    /// either end. Four-item fans now open 2 + 2.
+    public static let maxPerRow = 3
+    /// Gap from the bubble's bottom EDGE to the top of the label box
+    /// (Sebastian, 2026-08-29). Superseded the old fixed centre-to-centre
+    /// drop, which drifted as soon as buttons changed size.
+    public static let labelGap: CGFloat = 4
+    /// A one-line label at 8.5 pt: 10.5 pt of glyphs + 1.5 pt padding each
+    /// side, measured off the running app. Wrapped labels are taller, so the
+    /// Bench measures the real node and only the seed uses this.
+    public static let labelBoxHeight: CGFloat = 13.5
 
     /// How many items ride the top row: balanced across two rows so neither
     /// looks stranded (6 → 3+3, 5 → 3+2).
@@ -326,10 +353,17 @@ public enum TopArcLayout {
         return row(top, y: apexY) + row(count - top, y: apexY + rowGap)
     }
 
-    /// Label center for the bubble at `p` — always straight below it, so a
-    /// label can never cover a neighbouring bubble in a fixed arc.
-    public static func labelPosition(for p: CGPoint) -> CGPoint {
-        CGPoint(x: p.x, y: p.y + labelDrop)
+    /// Label centre for a bubble — always straight below it and sharing its
+    /// x, so a label can never cover a neighbour and always reads as
+    /// belonging to its own button.
+    ///
+    /// Measured from the bubble's EDGE, not its centre: `labelGap` is the
+    /// visible whitespace, which is what stays constant when a button is
+    /// resized.
+    public static func labelPosition(for p: CGPoint,
+                                     diameter: CGFloat = 44,
+                                     labelHeight: CGFloat = labelBoxHeight) -> CGPoint {
+        CGPoint(x: p.x, y: p.y + diameter / 2 + labelGap + labelHeight / 2)
     }
 
     // The three anchor pucks sit along the bottom at roughly x = 0.15w,
@@ -341,16 +375,8 @@ public enum TopArcLayout {
     // not enough for a Ø34 pad — ✕ drawn there lands on the meds puck, and
     // the two read as one control. The side band at y ≈ h−77 is the only
     // place clear of both the pucks below and the arc's second row above.
-    private static func padY(_ bounds: CGSize) -> CGFloat { bounds.height - 77 }
-
-    /// Bail-out pad: left edge, level with the gap under the arc.
-    public static func cancel(bounds: CGSize) -> CGPoint {
-        CGPoint(x: sideInset, y: padY(bounds))
-    }
-
-    /// Pop-a-level pad: mirrored on the right edge. Both stay put for every
-    /// fan at every depth, so exiting is one fixed reach.
-    public static func back(bounds: CGSize) -> CGPoint {
-        CGPoint(x: bounds.width - sideInset, y: padY(bounds))
-    }
+    // RETIRED 2026-08-29. The pads no longer live in fan space at all —
+    // Sebastian put Back in the screen's top-left corner, which is ABOVE this
+    // box entirely (fan y −19). They are now shared screen-point constants on
+    // `FanLayout.Pads`, drawn in the chrome layer. See the note there.
 }
