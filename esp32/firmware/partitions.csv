@@ -1,0 +1,7 @@
+# CodeRing partition table for the 32 MB flash on this board.
+# One app slot for now; OTA and the session store arrive with M5.
+# Name,     Type, SubType,  Offset,   Size
+nvs,        data, nvs,      ,         64K
+phy_init,   data, phy,      ,         4K
+factory,    app,  factory,  ,         6M
+storage,    data, spiffs,   ,         8M

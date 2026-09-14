@@ -1,0 +1,35 @@
+# Board facts, read off the real unit with esptool (see esp32/README.md).
+CONFIG_IDF_TARGET="esp32s3"
+
+# 32 MB flash, quad mode — the eFuse says quad, so do not "upgrade" this.
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# ESP32-S3R8: 8 MB octal PSRAM. The LVGL frame buffers and, later, the
+# session struct live here rather than in scarce internal RAM.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# 1 kHz tick: LVGL animation and touch sampling get millisecond resolution.
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# The console is the built-in USB-Serial/JTAG port (no UART bridge on this
+# board), which is what `idf.py monitor` attaches to.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# The 96 kB session struct goes to PSRAM (EXT_RAM_BSS_ATTR in main.c).
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_USE_PERF_MONITOR=n
+# Big timer numerals have to be readable at arm's length.
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_48=y

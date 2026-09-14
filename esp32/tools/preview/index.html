@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeRing — engine preview</title>
+<style>
+  :root {
+    --bg: #0A0F1E; --surface: #131A2E; --surface-hi: #1B2440; --track: #1E2742;
+    --text: #F2F5FF; --dim: #8A93B0;
+    --med: #FF3B5C; --shock: #FFB020; --cpr: #A78BFA; --rosc: #4ADE80;
+    --rhythm: #60A5FA; --volume: #3B82F6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    padding: 16px; padding-block: 16px;
+  }
+  .num { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; margin-bottom: 14px; }
+  h1 { font-size: 15px; letter-spacing: .14em; margin: 0; font-weight: 700; }
+  .tag {
+    font-size: 10px; letter-spacing: .1em; color: var(--shock);
+    border: 1px solid rgba(255,176,32,.5); border-radius: 999px; padding: 2px 8px;
+  }
+  .muted { color: var(--dim); font-size: 12px; }
+  .grid { display: grid; grid-template-columns: minmax(340px, 1.15fr) minmax(300px, .85fr); gap: 14px; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border-radius: 14px; padding: 14px; }
+  .card h2 {
+    font-size: 10px; letter-spacing: .12em; color: var(--dim);
+    margin: 0 0 10px; font-weight: 700; text-transform: uppercase;
+  }
+  #hint {
+    background: var(--surface-hi); border-left: 3px solid var(--cpr);
+    border-radius: 8px; padding: 9px 12px; margin-bottom: 12px; font-weight: 600;
+  }
+  #banner { display: none; background: rgba(255,59,92,.15); border: 1px solid var(--med);
+    color: var(--med); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-weight: 700; }
+  .ringrow { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+  .ringwrap { position: relative; width: 190px; height: 190px; flex: none; max-width: 100%; }
+  .ringwrap svg { transform: rotate(-90deg); width: 100%; height: 100%; }
+  .ringtext {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 2px;
+  }
+  .ringtext .big { font-size: 40px; font-weight: 700; letter-spacing: -.02em; }
+  .ringtext .cap { font-size: 10px; letter-spacing: .12em; color: var(--dim); }
+  .stack { display: flex; flex-direction: column; gap: 8px; min-width: 190px; flex: 1; }
+  .row {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+    background: var(--surface-hi); border-radius: 8px; padding: 8px 11px;
+  }
+  .row .label { font-size: 11px; letter-spacing: .08em; color: var(--dim); }
+  .row .value { font-size: 20px; font-weight: 700; }
+  .overdue { color: var(--med) !important; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  button {
+    font: inherit; font-weight: 600; color: var(--text); cursor: pointer;
+    background: var(--surface-hi); border: 1px solid rgba(255,255,255,.09);
+    border-radius: 9px; padding: 8px 12px;
+  }
+  button:hover { border-color: rgba(255,255,255,.3); }
+  button:active { transform: translateY(1px); }
+  button.small { padding: 5px 9px; font-size: 12px; font-weight: 500; }
+  button.accent { border-color: currentColor; }
+  .group { margin-bottom: 12px; }
+  .group h3 { font-size: 10px; letter-spacing: .12em; color: var(--dim); margin: 0 0 6px; font-weight: 700; }
+  .drug { display: flex; align-items: center; gap: 4px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  #log { max-height: 340px; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 2px; }
+  .entry { display: flex; gap: 9px; padding: 5px 7px; border-radius: 7px; align-items: baseline; }
+  .entry:nth-child(odd) { background: rgba(255,255,255,.03); }
+  .entry .stamp { color: var(--dim); font-size: 12px; min-width: 46px; }
+  .entry .what { flex: 1; }
+  .entry .det { color: var(--dim); font-size: 12px; }
+  #timers { display: flex; flex-direction: column; gap: 4px; }
+  .tline { display: flex; justify-content: space-between; gap: 10px; padding: 4px 7px; border-radius: 6px; background: rgba(255,255,255,.03); }
+  #stats { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .stat { background: var(--surface-hi); border-radius: 8px; padding: 7px 11px; min-width: 88px; }
+  .stat .k { font-size: 10px; letter-spacing: .1em; color: var(--dim); }
+  .stat .v { font-size: 17px; font-weight: 700; }
+  #toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(14px);
+    background: var(--surface-hi); border: 1px solid rgba(255,255,255,.14);
+    padding: 10px 16px; border-radius: 11px; font-weight: 700; opacity: 0;
+    transition: opacity .16s, transform .16s; pointer-events: none; max-width: 90vw;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.bad { border-color: var(--med); color: var(--med); }
+  #toast.good { border-color: var(--rosc); color: var(--rosc); }
+  input[type=number] {
+    font: inherit; width: 84px; background: var(--surface-hi); color: var(--text);
+    border: 1px solid rgba(255,255,255,.12); border-radius: 8px; padding: 7px 9px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>CODERING</h1>
+  <span class="tag">ENGINE PREVIEW · NOT THE WATCH UI</span>
+  <span class="muted">The real C engine (<code>esp32/core</code>) compiled and running — this page only draws what it reports.</span>
+</header>
+
+<div id="banner">LOG FULL — new entries are no longer being recorded</div>
+<div id="hint">…</div>
+
+<div class="grid">
+  <div>
+    <div class="card">
+      <h2 id="protoline">Cardiac Arrest · ARREST</h2>
+      <div class="ringrow">
+        <div class="ringwrap">
+          <svg viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="44" fill="none" stroke="var(--track)" stroke-width="8"/>
+            <circle id="ring" cx="50" cy="50" r="44" fill="none" stroke="var(--cpr)"
+                    stroke-width="8" stroke-linecap="round"
+                    stroke-dasharray="276.5" stroke-dashoffset="0"/>
+          </svg>
+          <div class="ringtext">
+            <div class="big num" id="cycle">2:00</div>
+            <div class="cap" id="cyclecap">CPR CYCLE 1</div>
+          </div>
+        </div>
+        <div class="stack">
+          <div class="row"><span class="label">CODE CLOCK</span><span class="value num" id="elapsed">0:00</span></div>
+          <div class="row" id="epirow"><span class="label">EPI</span><span class="value num" id="epi">3:00</span></div>
+          <div class="row" id="vitalrow" style="display:none"><span class="label">VITALS</span><span class="value num" id="vitals">5:00</span></div>
+          <div class="row" id="roscrow" style="display:none"><span class="label">SINCE ROSC</span><span class="value num" id="roscel">0:00</span></div>
+          <div class="row" id="pcrow" style="display:none"><span class="label">HANDS OFF</span><span class="value num" id="pc">0:00</span></div>
+        </div>
+      </div>
+      <div id="stats"></div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h2>Controls</h2>
+      <div class="group">
+        <h3>State</h3>
+        <div class="chips" id="state-controls"></div>
+      </div>
+      <div class="group">
+        <h3>Weight</h3>
+        <div class="chips">
+          <input type="number" id="weight" value="10" min="1" max="150" step="0.5">
+          <button class="small" onclick="setWeight()">Set weight</button>
+          <span class="muted" id="weightnow"></span>
+        </div>
+      </div>
+      <div class="group">
+        <h3>Drugs &amp; shocks</h3>
+        <div class="chips" id="drugs"></div>
+      </div>
+      <div class="group">
+        <h3>Events</h3>
+        <div class="chips" id="events"></div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Event log · <span id="logcount" class="muted">0</span></h2>
+      <div id="log"></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>Time since last</h2>
+      <div id="timers"></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let snap = null, snapAt = 0, catalog = null;
+
+// ---- formatting (mirrors cr_text.c so the page reads like the device) ----
+function clock(ms) {
+  const t = Math.trunc(ms / 1000), mag = Math.abs(t);
+  return (t < 0 ? "-" : "") + Math.floor(mag / 60) + ":" + String(mag % 60).padStart(2, "0");
+}
+const hex = (c) => c ? "#" + c : "var(--dim)";
+
+function toast(text, kind) {
+  const el = $("toast");
+  el.textContent = text;
+  el.className = "show " + (kind || "");
+  clearTimeout(toast.timer);
+  // 2 s exactly, same as the watch's confirmation toast.
+  toast.timer = setTimeout(() => { el.className = ""; }, 2000);
+}
+
+async function send(name, arg1 = "", arg2 = "", value = -1) {
+  const q = new URLSearchParams({ name, arg1, arg2, value });
+  const res = await fetch("/api/command?" + q).then(r => r.json());
+  await refresh();
+  // The engine reporting "nothing happened" is the whole point: a gesture
+  // that logs nothing must SAY so rather than going quiet.
+  if (!res.changed) {
+    toast("Nothing logged — " + name.replace(/_/g, " ") + " not available now", "bad");
+  } else if (snap && snap.log.count) {
+    const last = snap.log.events[snap.log.events.length - 1];
+    if (last) toast(last.title + (last.detail ? " — " + last.detail : ""), "good");
+  }
+  return res.changed;
+}
+
+async function refresh() {
+  snap = await fetch("/api/snapshot").then(r => r.json());
+  snapAt = performance.now();
+  render();
+}
+
+function setWeight() { send("weight", "", "", parseFloat($("weight").value)); }
+
+// ---- controls built once ----
+function buildControls() {
+  const state = [
+    ["Start CPR", "start_cpr", "--cpr"], ["Pause / resume", "pause", "--shock"],
+    ["Pulse check", "pulse_begin", "--rhythm"], ["No pulse", "pulse_none", "--cpr"],
+    ["Pulse found", "pulse_found", "--rosc"], ["ROSC", "rosc", "--rosc"],
+    ["Re-arrest", "rearrest", "--med"], ["Vitals done", "vitals", "--rosc"],
+    ["Undo", "undo", "--dim"], ["End code", "end", "--dim"], ["Reset", "reset", "--dim"],
+  ];
+  $("state-controls").innerHTML = "";
+  for (const [label, cmd, color] of state) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.style.color = `var(${color})`;
+    b.className = "accent";
+    b.onclick = () => send(cmd, "", "", cmd === "reset" ? parseFloat($("weight").value) : -1);
+    $("state-controls").appendChild(b);
+  }
+
+  $("drugs").innerHTML = "";
+  for (const d of catalog.drugs) {
+    const wrap = document.createElement("span");
+    wrap.className = "drug";
+    const b = document.createElement("button");
+    b.innerHTML = `<span class="dot" style="background:${hex(d.color)}"></span> ${d.name}`;
+    b.style.display = "flex"; b.style.gap = "7px"; b.style.alignItems = "center";
+    b.title = d.subtitle;
+    b.onclick = () => send("drug", d.id);          // -1 = follow the ladder
+    wrap.appendChild(b);
+    if (d.steps.length > 1) {
+      d.steps.forEach((label, i) => {
+        const s = document.createElement("button");
+        s.className = "small"; s.textContent = label;
+        s.onclick = () => send("drug", d.id, "", i);   // force a rung
+        wrap.appendChild(s);
+      });
+    }
+    $("drugs").appendChild(wrap);
+  }
+
+  $("events").innerHTML = "";
+  for (const e of catalog.events) {
+    const wrap = document.createElement("span");
+    wrap.className = "drug";
+    const b = document.createElement("button");
+    b.innerHTML = `<span class="dot" style="background:${hex(e.color)}"></span> ${e.title}`;
+    b.style.display = "flex"; b.style.gap = "7px"; b.style.alignItems = "center";
+    b.onclick = () => send("event", e.id);
+    wrap.appendChild(b);
+    for (const sub of e.subOptions) {
+      const s = document.createElement("button");
+      s.className = "small"; s.textContent = sub;
+      s.onclick = () => send("event", e.id, sub);
+      wrap.appendChild(s);
+    }
+    $("events").appendChild(wrap);
+  }
+}
+
+// ---- render, with local ticking between polls ----
+function render() {
+  if (!snap || snap.error) return;
+  const drift = performance.now() - snapAt;      // the page counts down locally
+  const st = snap.state, clk = snap.clock;
+  const frozen = st.paused || st.pulseCheck;     // the cycle stops; drug timers do not
+
+  $("banner").style.display = st.overflow ? "block" : "none";
+  $("hint").textContent = snap.hint;
+  $("protoline").textContent = `${snap.session.protocolName} · ${snap.session.protocolShort}`;
+  $("weightnow").textContent = `engine has ${snap.patient.weightKg} kg (${snap.patient.source})`;
+
+  const cycleRem = clk.cycleRemainingMs - (frozen ? 0 : drift);
+  const overdue = cycleRem <= 0;
+  $("cycle").textContent = clock(cycleRem);
+  $("cycle").className = "big num" + (overdue ? " overdue" : "");
+  $("cyclecap").textContent = st.rosc ? "ROSC" : `CPR CYCLE ${clk.cycleIndex + 1}`;
+  const frac = clk.cycleMs ? Math.max(0, Math.min(1, cycleRem / clk.cycleMs)) : 0;
+  const C = 2 * Math.PI * 44;
+  $("ring").setAttribute("stroke-dashoffset", String(C * (1 - frac)));
+  $("ring").setAttribute("stroke", overdue ? "var(--med)" : (st.paused ? "var(--shock)" : "var(--cpr)"));
+
+  $("elapsed").textContent = clock(clk.elapsedMs + drift);
+
+  const epi = snap.intervals[0];
+  if (epi) {
+    const rem = epi.remainingMs - (epi.running ? drift : 0);
+    $("epi").textContent = epi.running ? clock(rem) : clock(epi.durationMs);
+    $("epi").className = "value num" + (epi.running && rem <= 0 ? " overdue" : "");
+    $("epirow").style.opacity = epi.running ? "1" : ".55";
+  }
+
+  $("pcrow").style.display = st.pulseCheck ? "flex" : "none";
+  if (st.pulseCheck) $("pc").textContent = clock(clk.pulseCheckElapsedMs + drift);
+  $("roscrow").style.display = st.rosc ? "flex" : "none";
+  if (st.rosc) $("roscel").textContent = clock(clk.roscElapsedMs + drift);
+  $("vitalrow").style.display = clk.vitalsRemainingMs === null ? "none" : "flex";
+  if (clk.vitalsRemainingMs !== null) {
+    const v = clk.vitalsRemainingMs - drift;
+    $("vitals").textContent = clock(v);
+    $("vitals").className = "value num" + (v <= 0 ? " overdue" : "");
+  }
+
+  const s = snap.stats;
+  $("stats").innerHTML = [
+    ["CPR FRACTION", Math.round(s.cprFraction * 100) + "%"],
+    ["PAUSES", s.pauseCount], ["EPI", s.epiCount], ["SHOCKS", s.shockCount],
+    ["RHYTHM", s.rhythmCheckCount],
+    ["TO 1st EPI", s.secondsToFirstEpi === null ? "—" : clock(s.secondsToFirstEpi * 1000)],
+  ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v num">${v}</div></div>`).join("");
+
+  $("logcount").textContent = snap.log.count + " entries";
+  $("log").innerHTML = snap.log.events.map(e => `
+    <div class="entry">
+      <span class="stamp num">${e.stamp}</span>
+      <span class="dot" style="background:${hex(e.color)};align-self:center"></span>
+      <span class="what">${escapeHtml(e.title)}${e.detail ? ` <span class="det">${escapeHtml(e.detail)}</span>` : ""}</span>
+    </div>`).join("");
+
+  $("timers").innerHTML = snap.timers.map(t => `
+    <div class="tline">
+      <span><span class="dot" style="background:${hex(t.color)};display:inline-block;margin-right:7px"></span>${escapeHtml(t.title)}</span>
+      <span class="num">${clock(t.elapsedMs + drift)}</span>
+    </div>`).join("");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+(async function start() {
+  catalog = await fetch("/api/catalog").then(r => r.json());
+  buildControls();
+  await refresh();
+  setInterval(refresh, 500);   // poll the engine
+  setInterval(render, 100);    // tick locally in between, so nothing stutters
+})();
+</script>
+</body>
+</html>

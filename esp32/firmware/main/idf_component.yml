@@ -1,0 +1,6 @@
+dependencies:
+  idf: ">=5.3"
+  # Waveshare's own board support package: display (CO5300 over QSPI, with
+  # its 22-column gap), FT3168 touch, audio codec, SD. Using theirs rather
+  # than re-deriving the init sequence by hand.
+  waveshare/esp32_s3_touch_amoled_2_06: "^2.0.0"

@@ -73,6 +73,40 @@ Size on the target: **30 KB of code**, one 96 KB session struct (512 events,
   are two consumers of one derived snapshot. Anything the engine learns
   reaches both; scraping state out of UI code later is how that goes wrong.
 
+## Run it on the watch
+
+```bash
+. ~/esp/esp-idf/export.sh          # once per terminal window
+cd esp32/firmware && idf.py -p /dev/cu.usbmodem101 flash monitor
+```
+
+`firmware/` is an ESP-IDF project; `core/` is pulled in as a component, so
+the firmware and the host tests compile the **same** engine sources.
+
+Two tools worth knowing:
+
+- **`main/ui_probe.c`** prints where every object actually landed, and the
+  coordinates of every touch. The watch build was verified by dumping real
+  frame coordinates rather than by looking at screenshots; M3's layout gets
+  checked the same way. (It must call `lv_obj_update_layout()` first —
+  without it LVGL reports every object as 0×0.)
+- **`tools/make_fonts.sh`** regenerates the app's fonts. LVGL's built-ins
+  are ASCII-only, so "Hands off — checking pulse" drew a box where the dash
+  belongs. Changing the strings was not an option — they must stay
+  byte-identical to the watch — so the font carries `— – · → × ₂` instead.
+  The script verifies the glyphs are present, because a missing one fails
+  silently as an empty box.
+
+## Watch the engine in a browser
+
+```bash
+cd esp32 && make preview          # then open http://localhost:8765
+```
+
+Real compiled C behind a local page — the same `cr_snapshot_json` feed the
+trauma-bay TV will consume. Useful for exercising clinical flows quickly,
+and for seeing "Nothing logged" fire when the engine refuses an action.
+
 ## Verified on the real board (2026-09-14)
 
 Read off the unit itself with esptool, not from the datasheet:
@@ -92,9 +126,11 @@ Read off the unit itself with esptool, not from the datasheet:
 
 - **M1 — the engine, done.** 59 tests / 669 checks green, byte-identical to
   the Swift engine on the parity scenario, compiles clean for the ESP32-S3.
-- **M2** — LVGL skeleton on the panel, plus a coordinate-dump probe: dump the
-  real object coordinates and diff them against the layout table. Measure,
-  don't eyeball.
+- **M2 — first light, done** (verified on the real watch, 2026-09-14).
+  `firmware/` boots in ~1.1 s to a deliberately plain screen driven by the
+  engine: panel, touch and clinical rules proven to work together before any
+  layout is built on top. Confirmed on hardware: the cycle freezes during a
+  pulse check while the epi timer keeps running — invariant 7, on the wrist.
 - **M3** — the radial fans and the interaction rules; the 16 deferred layout
   tests come back here, re-expressed in pixels.
 - **M4** — audio: the metronome (already audio-only on the watch) and the

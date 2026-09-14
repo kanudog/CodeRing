@@ -1,2 +1,9 @@
 build/
 .build/
+
+# ESP-IDF generated: components it downloads (199 MB + 183 MB), and the
+# config it derives from sdkconfig.defaults. dependencies.lock IS committed,
+# so everyone resolves the same component versions.
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old

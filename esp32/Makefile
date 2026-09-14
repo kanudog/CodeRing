@@ -24,7 +24,7 @@ CORE_SRC := $(wildcard core/src/*.c)
 TEST_SRC := $(wildcard test/*.c)
 HEADERS  := $(wildcard core/include/*.h) $(wildcard core/src/*.h) $(wildcard test/*.h)
 
-.PHONY: test tests spec-coverage parity target-check clean
+.PHONY: test tests spec-coverage parity preview target-check clean
 
 test: tests spec-coverage
 	@./$(BUILD)/cr_tests $(NAME)
@@ -44,6 +44,18 @@ parity:
 
 $(BUILD):
 	@mkdir -p $(BUILD)
+
+# Watch the engine run in a browser, months before there are pixels on the
+# panel. The page draws nothing it did not get from cr_snapshot_json() — the
+# same feed the trauma-bay TV will consume.
+PREVIEW := tools/preview
+LIBEXT  := $(if $(filter Darwin,$(shell uname -s)),dylib,so)
+
+preview: $(BUILD)/libcodering.$(LIBEXT)
+	@python3 $(PREVIEW)/server.py
+
+$(BUILD)/libcodering.$(LIBEXT): $(CORE_SRC) $(PREVIEW)/crp_shim.c $(HEADERS) | $(BUILD)
+	$(CC) $(WARN) -O1 -g -fPIC -shared $(INC) $(CORE_SRC) $(PREVIEW)/crp_shim.c -lm -o $@
 
 # Compiles the core with the real cross-compiler: 32-bit ints, different
 # size_t, no host libc quirks. Needs ESP-IDF on PATH:
