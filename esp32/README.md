@@ -131,11 +131,54 @@ Read off the unit itself with esptool, not from the datasheet:
   engine: panel, touch and clinical rules proven to work together before any
   layout is built on top. Confirmed on hardware: the cycle freezes during a
   pulse check while the epi timer keeps running — invariant 7, on the wrist.
-- **M3** — the radial fans and the interaction rules; the 16 deferred layout
-  tests come back here, re-expressed in pixels.
+- **M3 — the real layout, done** (on the watch, 2026-09-14). Generated from
+  the watch's Swift by `tools/gen_layout.js`; icons from the Layout Bench by
+  `firmware/tools/make_icons.sh`; the menu tree in `core/src/cr_menu.c`.
+  Screens: home, setup (weight → confirm, with Broselow and the APLS age
+  estimate), the live session, the event log, the timers list, and the
+  hands-off pulse check. 13 of the 16 deferred layout tests are now ported;
+  the other 3 are the superseded anchor-bloom cascade.
+- **NEXT — ending a code, and ROSC.** Two screens the live session still
+  lacks:
+  - The flag button ends the code: a confirmation, then a handoff summary —
+    total time, CPR fraction, every drug with its count, the event log.
+    `cr_session_stats` and `cr_engine_end` already do the maths and are
+    tested; this is a screen, not new logic.
+  - The ROSC screen after a pulse is found. **Its layout is already
+    ported**: `cr_screen.vitals_ring`, `.vitals_label`, `.vitals_count`,
+    `.rosc_elapsed`, `.vitals_prompt`, `.re_arrest` and `.handoff` are in
+    the generated table and currently unused. The engine side
+    (`cr_engine_vitals_remaining`, `confirm_vitals`, `re_arrest`) is tested
+    too. Watch reference: `WatchApp/LiveSessionView.swift` around the ROSC
+    and end-of-code sections.
 - **M4** — audio: the metronome (already audio-only on the watch) and the
-  cue model that replaces haptics.
+  cue model that replaces haptics. The I2C scan confirms an ES8311 codec at
+  0x18 and an ES7210 mic ADC at 0x40 — and **no haptic driver at 0x5A**, so
+  the tick felt on a tap is the speaker or the panel, not a motor.
 - **M5** — persistence (NVS + RTC), CSV to the TF card, and the TV link.
+  Recent and Settings on the home screen are drawn but inert until then.
+
+## Things that only showed up on the hardware
+
+Worth knowing before adding screens, because none of these fail a test:
+
+- **LVGL latches the input device on the object you pressed.** Swapping
+  screens inside that button's own handler leaves every later touch routed
+  to an invisible object, and the new screen looks completely dead. Use
+  `load_screen()` in ui_flow.c, which releases the touch first.
+- **LVGL's built-in allocator is a fixed 64 kB pool.** The six screens need
+  ~156 kB, and the overflow crashed inside glyph drawing — a white screen
+  and a reboot loop. `CONFIG_LV_USE_CLIB_MALLOC=y` puts LVGL on the system
+  heap; boot logs report free memory afterwards.
+- **`LV_SYMBOL_*` and `lv_label_set_text_fmt("%.1f")` both come from LVGL's
+  own builds** — the symbol font our custom font replaced, and a printf
+  compiled without float support. They render empty boxes and a bare "f".
+  Use an icon from `cr_icon()` and format floats with `snprintf` first.
+- **The panel is a ROUNDED rectangle.** Controls tucked into a corner are
+  half off the glass; `corner_safe()` in ui_screen.c nudges them back.
+- **Labels clip if given the table's box height**, because those are watchOS
+  point sizes and the rasterised font is taller. `place_label()` sizes a
+  label to its own text and re-centres it when the text changes width.
 
 ## Two Swift quirks carried over on purpose
 

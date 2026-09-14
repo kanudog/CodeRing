@@ -28,6 +28,13 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # The 96 kB session struct goes to PSRAM (EXT_RAM_BSS_ATTR in main.c).
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 
+# LVGL's built-in allocator is a fixed 64 kB pool, and the app now builds six
+# screens' worth of objects up front — it ran out and crashed inside glyph
+# drawing. The C library allocator uses the system heap instead, where there
+# is 275 kB of internal RAM and 7 MB of PSRAM.
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_BUILTIN_MALLOC=n
+
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_USE_PERF_MONITOR=n
 # Big timer numerals have to be readable at arm's length.

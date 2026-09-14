@@ -112,5 +112,8 @@ void app_main(void)
     cr_probe_dump(ui_live_screen(), "live session layout");
     bsp_display_unlock();
 
-    ESP_LOGI(TAG, "up — %s, %.1f kg", engine.protocol.name, engine.session.patient.weight_kg);
+    ESP_LOGI(TAG, "screens built — internal %d kB free, PSRAM %d kB free",
+             (int)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+             (int)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+    ESP_LOGI(TAG, "up — %s", engine.protocol.name);
 }

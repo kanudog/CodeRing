@@ -31,13 +31,32 @@ static lv_obj_t *home_screen;
 static lv_obj_t *weight_screen;
 static lv_obj_t *weight_readout;
 static lv_obj_t *weight_source_label;
+static lv_obj_t *confirm_screen;
+static lv_obj_t *protocol_screen;
+static lv_obj_t *age_screen;
+static lv_obj_t *age_readout;
+static lv_obj_t *age_estimate_label;
+static lv_obj_t *chip_protocol_value;
+static lv_obj_t *chip_weight_value;
+static lv_obj_t *chip_age_value;
+
+/// Optional, and never blocks GO: the record can carry an age, and the APLS
+/// estimate is there when nobody knows the weight.
+static int age_months = -1;
+/// Months for infants, years for everyone else — typing "5" should be able
+/// to mean either.
+static bool age_in_years;
+/// A label, not a mode: nothing about the timers depends on which protocol
+/// is chosen, so it can be set once the rhythm is actually known.
+static const cr_protocol_t *chosen_protocol = &cr_protocol_pals_arrest;
 
 /// What the setup is building. Starts where the watch's dial starts.
 static double weight_kg = 10.0;
 static cr_weight_source_t weight_source = CR_WEIGHT_MANUAL;
 static char weight_zone[8];
-/// Digits typed since the last clear; empty means the dial value stands.
+/// Digits typed since the last clear; empty means the starting value stands.
 static char typed[8];
+static bool typing_age;
 
 static lv_obj_t *label_at(lv_obj_t *parent, const char *text, uint32_t color,
                           const lv_font_t *font, int32_t x, int32_t y, int32_t w)
@@ -119,6 +138,8 @@ static void on_screen_press(lv_event_t *event)
              name ? name : "(unnamed)");
 }
 
+static void refresh_age(void);
+
 static void on_key(lv_event_t *event)
 {
     const char *key = lv_event_get_user_data(event);
@@ -131,6 +152,17 @@ static void on_key(lv_event_t *event)
         if (strcmp(key, ".") == 0 && strchr(typed, '.') != NULL) return;   // one point only
         typed[len] = key[0];
         typed[len + 1] = '\0';
+    }
+
+    if (typing_age) {
+        const int entered = typed[0] == '\0' ? -1 : (int)strtol(typed, NULL, 10);
+        age_months = entered < 0 ? -1 : (age_in_years ? entered * 12 : entered);
+        if (age_months > 216) {                       // 18 years, the paediatric scope
+            age_months = 216;
+            snprintf(typed, sizeof typed, age_in_years ? "18" : "216");
+        }
+        refresh_age();
+        return;
     }
 
     if (typed[0] == '\0') {
@@ -167,9 +199,12 @@ static void on_start_code(lv_event_t *event)
     patient.source = weight_source;
     snprintf(patient.broselow_zone_id, sizeof patient.broselow_zone_id, "%s", weight_zone);
 
-    // Cardiac Arrest by default; the protocol is a label, set from Adjust
-    // once the rhythm is actually known.
-    cr_engine_init(engine, &cr_protocol_pals_arrest, &cr_pals_drug_set,
+    if (age_months >= 0) {
+        patient.has_age = true;
+        patient.age_months = (int16_t)age_months;
+    }
+
+    cr_engine_init(engine, chosen_protocol, &cr_pals_drug_set,
                    cr_builtin_events, cr_builtin_event_count,
                    &patient, clock_ms(), "DEVICE-0001", "codering-esp32");
     ui_tick();
@@ -189,6 +224,297 @@ static void on_home(lv_event_t *event)
     (void)event;
     ESP_LOGI(TAG, "back to home");
     load_screen(home_screen);
+}
+
+/// A labelled value the wearer can tap to change — PROTOCOL, WEIGHT, AGE.
+#define CHIP_W 180
+#define CHIP_H 92
+
+static lv_obj_t *confirm_chip(lv_obj_t *parent, const char *eyebrow, uint32_t color,
+                              int32_t cx, int32_t cy, lv_event_cb_t handler, const char *probe)
+{
+    lv_obj_t *chip = button_at(parent, cx - CHIP_W / 2, cy - CHIP_H / 2,
+                               CHIP_W, CHIP_H, color, handler, NULL, probe);
+    lv_obj_set_style_radius(chip, CHIP_H / 2, 0);     // fully rounded
+    lv_obj_set_style_pad_all(chip, 6, 0);
+
+    // Two lines with real spacing. They used to be aligned to the chip's own
+    // edges, which put them on top of each other once the font's line height
+    // was taken into account.
+    lv_obj_t *label = lv_label_create(chip);
+    lv_label_set_text(label, eyebrow);
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    lv_obj_set_style_text_font(label, &cr_font_16, 0);
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, -20);
+
+    lv_obj_t *value = lv_label_create(chip);
+    lv_label_set_text(value, "—");
+    lv_obj_set_style_text_color(value, lv_color_hex(CR_THEME_TEXT), 0);
+    lv_obj_set_style_text_font(value, &cr_font_28, 0);
+    lv_obj_align(value, LV_ALIGN_CENTER, 0, 16);
+    return value;
+}
+
+static void refresh_confirm(void)
+{
+    lv_label_set_text(chip_protocol_value, chosen_protocol->short_name);
+
+    char text[24];
+    snprintf(text, sizeof text, "%.1f kg", weight_kg);
+    lv_label_set_text(chip_weight_value, text);
+
+    // Italic-equivalent: dim "tap" until it is set, so an unknown age reads
+    // as optional rather than missing.
+    if (age_months < 0) {
+        lv_label_set_text(chip_age_value, "tap");
+        lv_obj_set_style_text_color(chip_age_value, lv_color_hex(CR_THEME_TEXT_DIM), 0);
+    } else {
+        if (age_months < 24) snprintf(text, sizeof text, "%d mo", age_months);
+        else snprintf(text, sizeof text, "%d yr", age_months / 12);
+        lv_label_set_text(chip_age_value, text);
+        lv_obj_set_style_text_color(chip_age_value, lv_color_hex(CR_THEME_TEXT), 0);
+    }
+}
+
+static lv_obj_t *age_unit_buttons[2];
+
+static void refresh_age(void)
+{
+    char text[40];
+    // The chosen unit reads as selected; the other is just available.
+    for (size_t i = 0; i < 2; i++) {
+        if (age_unit_buttons[i] == NULL) continue;
+        const bool on = (i == 1) == age_in_years;
+        lv_obj_set_style_border_color(age_unit_buttons[i],
+                                      lv_color_hex(on ? CR_THEME_ACCESS : CR_THEME_SURFACE_HI), 0);
+        lv_obj_set_style_bg_color(age_unit_buttons[i],
+                                  lv_color_hex(on ? CR_THEME_SURFACE_HI : CR_THEME_SURFACE), 0);
+    }
+
+    if (age_months < 0) {
+        lv_label_set_text(age_readout, "—");
+        lv_label_set_text(age_estimate_label, "");
+        return;
+    }
+    if (age_months < 24) snprintf(text, sizeof text, "%d mo", age_months);
+    else snprintf(text, sizeof text, "%d yr %d mo", age_months / 12, age_months % 12);
+    lv_label_set_text(age_readout, text);
+    snprintf(text, sizeof text, "APLS estimate: %.1f kg", cr_weight_for_age_months(age_months));
+    lv_label_set_text(age_estimate_label, text);
+}
+
+static void on_show_confirm(lv_event_t *event)
+{
+    (void)event;
+    refresh_confirm();
+    load_screen(confirm_screen);
+}
+
+static void on_show_weight(lv_event_t *event)
+{
+    (void)event;
+    typing_age = false;
+    typed[0] = '\0';
+    refresh_weight();
+    load_screen(weight_screen);
+}
+
+static void on_show_protocols(lv_event_t *event)
+{
+    (void)event;
+    load_screen(protocol_screen);
+}
+
+static void on_pick_protocol(lv_event_t *event)
+{
+    chosen_protocol = lv_event_get_user_data(event);
+    ESP_LOGI(TAG, "protocol %s", chosen_protocol->name);
+    refresh_confirm();
+    load_screen(confirm_screen);
+}
+
+static void on_age_unit(lv_event_t *event)
+{
+    age_in_years = lv_event_get_user_data(event) != NULL;
+    // Re-read what was typed in the new unit rather than silently keeping a
+    // number that now means something different.
+    const int entered = typed[0] == '\0' ? -1 : (int)strtol(typed, NULL, 10);
+    age_months = entered < 0 ? -1 : (age_in_years ? entered * 12 : entered);
+    if (age_months > 216) age_months = 216;
+    refresh_age();
+}
+
+static void on_show_age(lv_event_t *event)
+{
+    (void)event;
+    typing_age = true;
+    typed[0] = '\0';
+    refresh_age();
+    load_screen(age_screen);
+}
+
+/// The fallback path: no scale, no tape, but somebody knows roughly how old
+/// the child is.
+static void on_use_estimate(lv_event_t *event)
+{
+    (void)event;
+    if (age_months >= 0) {
+        weight_kg = cr_weight_for_age_months(age_months);
+        weight_source = CR_WEIGHT_AGE_ESTIMATE;
+        weight_zone[0] = '\0';
+        refresh_weight();
+    }
+    refresh_confirm();
+    load_screen(confirm_screen);
+}
+
+/// The numeric keypad, shared by the weight and age screens.
+static void build_keypad(lv_obj_t *screen, int32_t top)
+{
+    static const char *const keys[12] = { "1", "2", "3", "4", "5", "6",
+                                          "7", "8", "9", ".", "0", "<" };
+    for (size_t i = 0; i < 12; i++) {
+        int32_t col = (int32_t)(i % 3), row = (int32_t)(i / 3);
+        lv_obj_t *key = button_at(screen, 44 + col * 110, top + row * 56, 96, 50,
+                                  CR_THEME_SURFACE_HI, on_key, (void *)keys[i], NULL);
+        lv_obj_t *label = lv_label_create(key);
+        // LV_SYMBOL_* lives in LVGL's built-in font, which ours replaced, so
+        // a symbol here renders as an empty box. Plain text instead.
+        lv_label_set_text(label, strcmp(keys[i], "<") == 0 ? "DEL" : keys[i]);
+        lv_obj_set_style_text_color(label, lv_color_hex(CR_THEME_TEXT), 0);
+        lv_obj_set_style_text_font(label, &cr_font_28, 0);
+        lv_obj_center(label);
+    }
+}
+
+static void build_confirm(void)
+{
+    confirm_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(confirm_screen, lv_color_hex(CR_THEME_BG), 0);
+    lv_obj_remove_flag(confirm_screen, LV_OBJ_FLAG_SCROLLABLE);
+    cr_probe_name(confirm_screen, "setup.confirm");
+
+    lv_obj_t *back = button_at(confirm_screen, 40, 56, 88, 56, CR_THEME_TEXT_DIM,
+                               on_show_weight, NULL, "confirm.back");
+    lv_obj_t *back_label = lv_label_create(back);
+    lv_label_set_text(back_label, "BACK");
+    lv_obj_set_style_text_color(back_label, lv_color_hex(CR_THEME_TEXT), 0);
+    lv_obj_set_style_text_font(back_label, &cr_font_16, 0);
+    lv_obj_center(back_label);
+
+    lv_obj_t *title = label_at(confirm_screen, "CONFIRM", CR_THEME_TEXT_DIM,
+                              &cr_font_16, 0, 70, 370);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_RIGHT, 0);
+
+    // Three chips orbiting GO, as on the watch: protocol upper-left, weight
+    // upper-right, age below.
+    chip_protocol_value = confirm_chip(confirm_screen, "PROTOCOL", CR_THEME_MED,
+                                       112, 186, on_show_protocols, "chip.protocol");
+    chip_weight_value = confirm_chip(confirm_screen, "WEIGHT", CR_THEME_AIRWAY,
+                                     298, 186, on_show_weight, "chip.weight");
+    chip_age_value = confirm_chip(confirm_screen, "AGE", CR_THEME_ACCESS,
+                                  205, 438, on_show_age, "chip.age");
+
+    // GO sits in the gap between them — 232 to 384, with ~40 px of air on
+    // each side, so it never lands on a chip.
+    lv_obj_t *go = lv_button_create(confirm_screen);
+    lv_obj_set_size(go, 152, 152);
+    lv_obj_set_pos(go, 129, 232);
+    lv_obj_set_style_radius(go, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(go, lv_color_hex(CR_THEME_ROSC), 0);
+    lv_obj_set_style_shadow_width(go, 0, 0);
+    lv_obj_add_event_cb(go, on_start_code, LV_EVENT_CLICKED, NULL);
+    cr_probe_name(go, "confirm.go");
+    lv_obj_t *go_label = lv_label_create(go);
+    lv_label_set_text(go_label, "GO");
+    lv_obj_set_style_text_color(go_label, lv_color_hex(CR_THEME_BG), 0);
+    lv_obj_set_style_text_font(go_label, &cr_font_48, 0);
+    lv_obj_center(go_label);
+}
+
+static void build_protocols(void)
+{
+    protocol_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(protocol_screen, lv_color_hex(CR_THEME_BG), 0);
+    lv_obj_remove_flag(protocol_screen, LV_OBJ_FLAG_SCROLLABLE);
+    cr_probe_name(protocol_screen, "setup.protocols");
+
+    label_at(protocol_screen, "PROTOCOL", CR_THEME_TEXT_DIM, &cr_font_16, 0, 44, 410);
+
+    // The five top-level choices. Nothing about the timers depends on this —
+    // it is the label the record carries.
+    for (size_t i = 0; i < cr_protocol_top_count && i < 5; i++) {
+        const cr_protocol_t *proto = cr_protocol_tops[i];
+        lv_obj_t *tile = button_at(protocol_screen, 45, 80 + (int32_t)i * 76, 320, 64,
+                                   CR_THEME_MED, on_pick_protocol, (void *)proto, NULL);
+        lv_obj_t *name = lv_label_create(tile);
+        lv_label_set_text(name, proto->name);
+        lv_obj_set_style_text_color(name, lv_color_hex(CR_THEME_TEXT), 0);
+        lv_obj_set_style_text_font(name, &cr_font_28, 0);
+        lv_obj_align(name, LV_ALIGN_LEFT_MID, 12, 0);
+
+        lv_obj_t *short_name = lv_label_create(tile);
+        lv_label_set_text(short_name, proto->short_name);
+        lv_obj_set_style_text_color(short_name, lv_color_hex(CR_THEME_TEXT_DIM), 0);
+        lv_obj_set_style_text_font(short_name, &cr_font_16, 0);
+        lv_obj_align(short_name, LV_ALIGN_RIGHT_MID, -12, 0);
+    }
+
+    lv_obj_t *back = button_at(protocol_screen, 125, 456, 160, 40, CR_THEME_TEXT_DIM,
+                               on_show_confirm, NULL, "protocols.back");
+    lv_obj_t *back_label = lv_label_create(back);
+    lv_label_set_text(back_label, "BACK");
+    lv_obj_set_style_text_color(back_label, lv_color_hex(CR_THEME_TEXT), 0);
+    lv_obj_set_style_text_font(back_label, &cr_font_16, 0);
+    lv_obj_center(back_label);
+}
+
+static void build_age(void)
+{
+    age_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(age_screen, lv_color_hex(CR_THEME_BG), 0);
+    lv_obj_remove_flag(age_screen, LV_OBJ_FLAG_SCROLLABLE);
+    cr_probe_name(age_screen, "setup.age");
+
+    lv_obj_t *title = label_at(age_screen, "AGE IN MONTHS", CR_THEME_TEXT_DIM,
+                               &cr_font_16, 0, 44, 370);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_RIGHT, 0);
+    age_readout = label_at(age_screen, "—", CR_THEME_TEXT, &cr_font_48, 0, 64, 370);
+    lv_obj_set_style_text_align(age_readout, LV_TEXT_ALIGN_RIGHT, 0);
+    age_estimate_label = label_at(age_screen, "", CR_THEME_ACCESS, &cr_font_16, 0, 122, 370);
+    lv_obj_set_style_text_align(age_estimate_label, LV_TEXT_ALIGN_RIGHT, 0);
+
+    lv_obj_t *back = button_at(age_screen, 40, 56, 88, 56, CR_THEME_TEXT_DIM,
+                               on_show_confirm, NULL, "age.back");
+    lv_obj_t *back_label = lv_label_create(back);
+    lv_label_set_text(back_label, "BACK");
+    lv_obj_set_style_text_color(back_label, lv_color_hex(CR_THEME_TEXT), 0);
+    lv_obj_set_style_text_font(back_label, &cr_font_16, 0);
+    lv_obj_center(back_label);
+
+    // MONTHS / YEARS.
+    const char *units[2] = { "MONTHS", "YEARS" };
+    for (size_t i = 0; i < 2; i++) {
+        age_unit_buttons[i] = button_at(age_screen, 45 + (int32_t)i * 165, 150, 155, 46,
+                                        CR_THEME_SURFACE_HI, on_age_unit,
+                                        i == 1 ? (void *)units : NULL, NULL);
+        lv_obj_set_style_radius(age_unit_buttons[i], 23, 0);
+        lv_obj_t *label = lv_label_create(age_unit_buttons[i]);
+        lv_label_set_text(label, units[i]);
+        lv_obj_set_style_text_color(label, lv_color_hex(CR_THEME_TEXT), 0);
+        lv_obj_set_style_text_font(label, &cr_font_16, 0);
+        lv_obj_center(label);
+    }
+
+    build_keypad(age_screen, 206);
+
+    lv_obj_t *use = button_at(age_screen, 45, 438, 320, 48, CR_THEME_ACCESS,
+                              on_use_estimate, NULL, "age.use");
+    lv_obj_t *use_label = lv_label_create(use);
+    lv_label_set_text(use_label, "USE ESTIMATE AS WEIGHT");
+    lv_obj_set_style_text_color(use_label, lv_color_hex(CR_THEME_ACCESS), 0);
+    lv_obj_set_style_text_font(use_label, &cr_font_16, 0);
+    lv_obj_center(use_label);
 }
 
 static void build_weight(void)
@@ -221,28 +547,23 @@ static void build_weight(void)
         lv_obj_set_style_bg_opa(chip, LV_OPA_70, 0);
     }
 
-    // Keypad. Three columns, four rows — a known weight is two taps.
-    static const char *const keys[12] = { "1", "2", "3", "4", "5", "6",
-                                          "7", "8", "9", ".", "0", "<" };
-    for (size_t i = 0; i < 12; i++) {
-        int32_t col = (int32_t)(i % 3), row = (int32_t)(i / 3);
-        lv_obj_t *key = button_at(weight_screen, 44 + col * 110, 192 + row * 56, 96, 50,
-                                  CR_THEME_SURFACE_HI, on_key, (void *)keys[i], NULL);
-        lv_obj_t *label = lv_label_create(key);
-        // LV_SYMBOL_* lives in LVGL's built-in font; ours replaced it, so a
-        // symbol here renders as an empty box. Plain text instead.
-        lv_label_set_text(label, strcmp(keys[i], "<") == 0 ? "DEL" : keys[i]);
-        lv_obj_set_style_text_color(label, lv_color_hex(CR_THEME_TEXT), 0);
-        lv_obj_set_style_text_font(label, &cr_font_28, 0);
-        lv_obj_center(label);
-    }
+    // A known weight is two taps.
+    build_keypad(weight_screen, 192);
 
-    // Below the keypad (which now ends at 412) and inside the bottom corner
-    // arcs. It used to sit ON the last keypad row and swallow those taps.
-    lv_obj_t *start = button_at(weight_screen, 75, 424, 260, 50, CR_THEME_ROSC,
-                                on_start_code, NULL, "setup.start");
+    // NEXT goes to confirm; SKIP launches with what is already set, because
+    // a code does not wait for a form to be filled in.
+    lv_obj_t *skip = button_at(weight_screen, 45, 424, 120, 50, CR_THEME_TEXT_DIM,
+                               on_start_code, NULL, "setup.skip");
+    lv_obj_t *skip_label = lv_label_create(skip);
+    lv_label_set_text(skip_label, "SKIP");
+    lv_obj_set_style_text_color(skip_label, lv_color_hex(CR_THEME_TEXT_DIM), 0);
+    lv_obj_set_style_text_font(skip_label, &cr_font_16, 0);
+    lv_obj_center(skip_label);
+
+    lv_obj_t *start = button_at(weight_screen, 180, 424, 185, 50, CR_THEME_ROSC,
+                                on_show_confirm, NULL, "setup.next");
     lv_obj_t *start_label = lv_label_create(start);
-    lv_label_set_text(start_label, "START CODE");
+    lv_label_set_text(start_label, "NEXT");
     lv_obj_set_style_text_color(start_label, lv_color_hex(CR_THEME_ROSC), 0);
     lv_obj_set_style_text_font(start_label, &cr_font_16, 0);
     lv_obj_center(start_label);
@@ -333,7 +654,11 @@ void ui_flow_create(cr_engine_t *e, cr_ms_t (*clock)(void))
     clock_ms = clock;
     build_home();
     build_weight();
+    build_confirm();
+    build_protocols();
+    build_age();
     refresh_weight();
+    refresh_confirm();
 }
 
 void ui_flow_show_home(void)
