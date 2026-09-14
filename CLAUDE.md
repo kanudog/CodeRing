@@ -12,6 +12,9 @@ Porting to the Waveshare ESP32-S3 AMOLED watch? Start with `docs/ESP32_PORT_HAND
 # Logic tests (run before AND after any CodeCore change — must stay green)
 cd CodeCore && swift test
 
+# ESP32 port (esp32/, portable C99 — no board or ESP-IDF needed)
+cd esp32 && make test      # also: make parity (diffs the C engine against Swift)
+
 # Simulator builds once the Xcode project exists (manual §3–8)
 xcodebuild -scheme "CodeRing Watch App" \
   -destination 'platform=watchOS Simulator,name=Apple Watch Series 9 (45mm)' build

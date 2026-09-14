@@ -1,0 +1,22 @@
+# Swift tests deliberately NOT ported yet, with the reason. spec_coverage.sh
+# fails if a Swift test is neither ported (named in a C test) nor listed
+# here — so nothing gets dropped by accident, only on purpose.
+#
+# Format: <SwiftClass.testName>  <reason>
+
+RadialLayoutTests.testCascadeAccessIVLimbsStaysOnScreenAndSpaced   M3 — re-express against the 410×502 pixel table; the rule (every bubble on screen, spaced for a fingertip) ports, the computed watchOS arc does not.
+RadialLayoutTests.testEveryParentExpandsOnScreen                   M3 — same; every parent in the real menu trees must lay its children out on screen.
+RadialLayoutTests.testFanLayoutOverridesMatchEditorExport          DOES NOT PORT — it pins drift between the editor's 198×191 space and the live 194×191 space. Collapsing to one coordinate space removes the thing it guards.
+TopArcLayoutTests.testArcSlotsAreFixedPitchAndOnScreen             M3 — fixed pitch and row height so muscle memory survives across fans.
+FanLayoutTests.testSeededFansStillMatchTheTopArc                   M3 — the seeded-vs-computed check only means something once the hand-placed pixel table exists.
+FanLayoutTests.testLabelsSitFourPointsUnderTheirButton             M3 — 4 pt under the button edge becomes ~8 px here.
+FanLayoutTests.testEveryButtonIsTheSameSize                        M3 — Ø44/25 pt becomes Ø91/52 px.
+FanLayoutTests.testEveryBubbleIsFullyOnScreen                      M3 — a bubble with its rim off the edge is a leaf that cannot be hit.
+FanLayoutTests.testBubblesNeverOverlap                             M3 — overlapping bubbles make hover flap, which reads as "it logged nothing".
+FanLayoutTests.testExitPadOverlapsAreExactlyTheDeliberateOnes      M3 — pins the deliberate ✕/Back overlaps so a new one fails loudly.
+FanLayoutTests.testExitPadsClearEveryBubble                        M3 — same rule one layer down.
+FanLayoutTests.testExitPadsAreOnScreen                             M3 — both pads fully on the physical panel.
+FanLayoutTests.testLabelsStayOnScreen                              M3 — labels inside the fan box.
+FanLayoutTests.testLabelsNeverCoverAnotherButton                   M3 — labels are wider than buttons; label width sets minimum spacing.
+FanLayoutTests.testLookupRefusesACountMismatch                     M3 — count-exact lookup with a computed fallback (the events fan grows with custom events).
+FanLayoutTests.testTableCoversEveryFanAtItsRealCount               M3 — the fan inventory, so a menu-tree edit fails here instead of silently falling back.
