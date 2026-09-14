@@ -51,6 +51,10 @@ extern const cr_test_case_t cr_settings_tests[];
 extern const size_t cr_settings_test_count;
 extern const cr_test_case_t cr_snapshot_tests[];
 extern const size_t cr_snapshot_test_count;
+extern const cr_test_case_t cr_menu_tests[];
+extern const size_t cr_menu_test_count;
+extern const cr_test_case_t cr_layout_tests[];
+extern const size_t cr_layout_test_count;
 extern const cr_test_case_t cr_port_tests[];
 extern const size_t cr_port_test_count;
 

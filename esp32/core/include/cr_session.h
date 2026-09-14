@@ -113,4 +113,21 @@ typedef struct {
 
 void cr_session_stats(const cr_session_t *s, cr_ms_t now, cr_stats_t *out);
 
+/// One med-timer chip: the drugs, shocks and fluids already given, each with
+/// how many times and how long since the last one. These ride around the
+/// ring on the live screen.
+typedef struct {
+    const char *key;      // definition id, pointing into the session's storage
+    const char *title;
+    uint32_t color;       // the item's own hue, frozen when it was logged
+    uint16_t count;
+    cr_ms_t since;
+} cr_med_chip_t;
+
+/// Newest-per-key in FIRST-SEEN order, capped at `cap`. When there are more
+/// than fit, the STALEST drops off — except `keep_key` (epinephrine on the
+/// watch), which never does. Everything stays in the timers list regardless.
+size_t cr_session_med_chips(const cr_session_t *s, const char *keep_key,
+                            cr_med_chip_t *out, size_t cap);
+
 #endif

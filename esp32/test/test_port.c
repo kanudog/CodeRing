@@ -210,7 +210,48 @@ static void test_stats_tally_every_med_by_name(void)
     CHECK(!stats.has_rosc);
 }
 
+// Port.medChipsKeepEpiAndDropTheStalest — six slots around the ring, and
+// the one the protocol is timed around never loses its place.
+static void test_med_chips_keep_epi_and_drop_the_stalest(void)
+{
+    test_make_engine(&engine, START);
+    cr_engine_t *e = &engine;
+    cr_engine_start_cpr(e, START);
+
+    cr_engine_log_drug(e, &cr_drug_epinephrine, -1, T(10));     // first, and stalest
+    cr_engine_log_drug(e, &cr_drug_atropine, -1, T(20));
+    cr_engine_log_drug(e, &cr_drug_adenosine, -1, T(30));
+    cr_engine_log_drug(e, &cr_drug_amiodarone, -1, T(40));
+    cr_engine_log_drug(e, &cr_drug_lidocaine, -1, T(50));
+    cr_engine_log_drug(e, &cr_drug_calcium, -1, T(60));
+
+    cr_med_chip_t chips[6];
+    size_t n = cr_session_med_chips(&e->session, CR_ID_EPI, chips, 6);
+    CHECK_I(n, 6);
+    CHECK_STR(chips[0].key, CR_ID_EPI);                          // first-seen order
+    CHECK_I(chips[0].count, 1);
+
+    // A seventh item pushes the stalest NON-epi out — epi stays.
+    cr_engine_log_drug(e, &cr_drug_bicarb, -1, T(70));
+    n = cr_session_med_chips(&e->session, CR_ID_EPI, chips, 6);
+    CHECK_I(n, 6);
+    CHECK_STR(chips[0].key, CR_ID_EPI);
+    bool has_atropine = false;
+    for (size_t i = 0; i < n; i++) {
+        if (strcmp(chips[i].key, CR_ID_ATROPINE) == 0) has_atropine = true;
+    }
+    CHECK(!has_atropine);                                        // it was the stalest
+
+    // A repeat updates the count and the clock, not the slot.
+    cr_engine_log_drug(e, &cr_drug_epinephrine, -1, T(200));
+    n = cr_session_med_chips(&e->session, CR_ID_EPI, chips, 6);
+    CHECK_STR(chips[0].key, CR_ID_EPI);
+    CHECK_I(chips[0].count, 2);
+    CHECK_I(chips[0].since, T(200));
+}
+
 const cr_test_case_t cr_port_tests[] = {
+    { "Port.medChipsKeepEpiAndDropTheStalest", test_med_chips_keep_epi_and_drop_the_stalest },
     { "Port.stableIdsArePermanentAndUnique", test_stable_ids_are_permanent_and_unique },
     { "Port.defaultsInventoryMatchesTheWatch", test_defaults_inventory_matches_the_watch },
     { "Port.logFullRefusesDrugsButNeverBlocksAPulseCheck",

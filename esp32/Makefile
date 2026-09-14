@@ -24,7 +24,7 @@ CORE_SRC := $(wildcard core/src/*.c)
 TEST_SRC := $(wildcard test/*.c)
 HEADERS  := $(wildcard core/include/*.h) $(wildcard core/src/*.h) $(wildcard test/*.h)
 
-.PHONY: test tests spec-coverage parity preview target-check clean
+.PHONY: test tests spec-coverage parity preview layout target-check clean
 
 test: tests spec-coverage
 	@./$(BUILD)/cr_tests $(NAME)
@@ -36,6 +36,12 @@ $(BUILD)/cr_tests: $(CORE_SRC) $(TEST_SRC) $(HEADERS) | $(BUILD)
 
 spec-coverage:
 	@sh test/spec_coverage.sh
+
+# Regenerates core/src/cr_layout_data.c from the watch's Swift layout files.
+# Run it after Sebastian re-places anything in the Layout Bench — the
+# coordinates are his, so they are converted, never retyped.
+layout:
+	@node tools/gen_layout.js
 
 # Runs one scenario through BOTH engines and diffs the traces — the real
 # proof that the behaviour ported. Needs Swift; not part of `make test`.

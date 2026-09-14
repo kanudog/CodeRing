@@ -183,3 +183,57 @@ void cr_session_stats(const cr_session_t *s, cr_ms_t now, cr_stats_t *out)
         out->seconds_to_rosc = (int32_t)((s->rosc - s->start) / 1000);
     }
 }
+
+size_t cr_session_med_chips(const cr_session_t *s, const char *keep_key,
+                            cr_med_chip_t *out, size_t cap)
+{
+    if (out == NULL || cap == 0) return 0;
+
+    // Everything given: meds, shocks and volume. One entry per item, in the
+    // order each first appeared, so a chip does not jump slots mid-code.
+    cr_med_chip_t all[CR_MAX_RUNNING_TIMERS];
+    size_t n = 0;
+    for (uint16_t i = 0; i < s->event_count; i++) {
+        const cr_event_t *ev = &s->events[i];
+        if (ev->category != CR_CAT_MEDICATION && ev->category != CR_CAT_DEFIBRILLATION &&
+            ev->category != CR_CAT_VOLUME) {
+            continue;
+        }
+        if (ev->definition_id[0] == '\0') continue;
+
+        size_t slot;
+        for (slot = 0; slot < n; slot++) {
+            if (strcmp(all[slot].key, ev->definition_id) == 0) break;
+        }
+        if (slot == n) {
+            if (n >= CR_MAX_RUNNING_TIMERS) continue;
+            all[n].key = ev->definition_id;
+            all[n].count = 0;
+            all[n].since = ev->date;
+            n++;
+        }
+        all[slot].count++;
+        if (ev->date >= all[slot].since) {            // keep the LATEST of this item
+            all[slot].since = ev->date;
+            all[slot].title = ev->title;
+            all[slot].color = cr_event_tint(ev);
+        }
+    }
+
+    // Too many for the slots: drop the stalest, but never the one the
+    // protocol is timed around.
+    while (n > cap) {
+        size_t victim = n;
+        for (size_t i = 0; i < n; i++) {
+            if (keep_key != NULL && strcmp(all[i].key, keep_key) == 0) continue;
+            if (victim == n || all[i].since < all[victim].since) victim = i;
+        }
+        if (victim == n) break;                        // everything is protected
+        for (size_t i = victim; i + 1 < n; i++) all[i] = all[i + 1];
+        n--;
+    }
+
+    if (n > cap) n = cap;
+    for (size_t i = 0; i < n; i++) out[i] = all[i];
+    return n;
+}

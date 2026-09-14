@@ -15,9 +15,16 @@
 /// object (a literal).
 void cr_probe_name(lv_obj_t *obj, const char *name);
 
+/// Records where the layout table says this object's CENTRE should be. The
+/// dump then prints the difference between intent and reality and flags
+/// anything that drifted, so the layout is checked by measurement rather
+/// than by looking at a photo — a 3 pt shift is invisible in a screenshot.
+void cr_probe_expect(lv_obj_t *obj, float x, float y);
+
 /// Prints the object tree with absolute screen coordinates, plus the
-/// display resolution it was measured against.
-void cr_probe_dump(lv_obj_t *root, const char *title);
+/// display resolution it was measured against. Returns the number of
+/// controls that landed more than a pixel from where the table put them.
+int cr_probe_dump(lv_obj_t *root, const char *title);
 
 /// Logs every touch press and release with its coordinates, so touch and
 /// display can be proven to share one coordinate space — the trap the
