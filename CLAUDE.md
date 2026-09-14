@@ -4,6 +4,8 @@ Demo pediatric code timer (watchOS + iOS + shared `CodeCore` package). NOT a med
 
 Full context: `BUILD_MANUAL.md`. Section 13 ("FOR AI MAINTAINERS") is your constitution for this repo — read it before editing anything.
 
+Porting to the Waveshare ESP32-S3 AMOLED watch? Start with `docs/ESP32_PORT_HANDOFF.md`.
+
 ## Commands
 
 ```bash
