@@ -51,6 +51,7 @@ static lv_obj_t *summary_banner, *summary_banner_label, *summary_list, *summary_
 static lv_obj_t *summary_done_label;
 static lv_obj_t *recents_screen, *recents_list, *recents_empty;
 static lv_obj_t *settings_screen, *settings_list;
+static lv_obj_t *home_tv_button, *home_tv_label;
 
 /// The live settings. Loaded once at boot, written back on every change —
 /// there is no Save button, because a settings screen you can leave without
@@ -849,13 +850,70 @@ void ui_flow_show_summary(void)
     }
 }
 
+static void refresh_settings(void);
+
+// MARK: - The TV link, on the home screen
+//
+// It lives here rather than only in Settings because it is the one thing
+// checked before a code rather than during one: is the display up? Buried
+// seven rows into a scrolling settings list, that question needed three taps
+// and a guess.
+
+static void refresh_home_tv(void)
+{
+    if (home_tv_button == NULL) return;
+    const bool running = wifi_link_running();
+    const int clients = wifi_link_clients();
+
+    // Three states, not two. "On" and "on with a display actually attached"
+    // are different answers to the only question this button is asked, and an
+    // access point nobody joined looks identical to a broken one otherwise.
+    uint32_t colour = CR_THEME_TEXT_DIM;
+    const char *text = "TV LINK  OFF";
+    if (running && clients > 0) { colour = CR_THEME_ROSC; text = "CONNECTED TO TV"; }
+    else if (running)           { colour = CR_THEME_CPR;  text = "TV LINK  waiting…"; }
+
+    lv_label_set_text(home_tv_label, text);
+    lv_obj_set_style_text_color(home_tv_label, lv_color_hex(colour), 0);
+    lv_obj_set_style_border_color(home_tv_button, lv_color_hex(colour), 0);
+}
+
+static void on_home_tv(lv_event_t *event)
+{
+    (void)event;
+    if (wifi_link_running()) wifi_link_stop();
+    else wifi_link_start(engine, clock_ms);
+    // Stored as what HAPPENED, not what was asked: a radio that refused to
+    // start must not leave a setting claiming it is on.
+    settings.tv_link_on = wifi_link_running();
+    settings_store_save(&settings);
+    refresh_home_tv();
+}
+
+/// Neither screen can know when a display joins — that arrives as a Wi-Fi
+/// event seconds later — so whichever is in front re-reads. Only on a change,
+/// because rebuilding a list every two seconds fights the scroll.
+static void on_link_poll(lv_timer_t *timer)
+{
+    (void)timer;
+    static int last_clients = -1;
+    static bool last_running;
+    const int clients = wifi_link_clients();
+    const bool running = wifi_link_running();
+    if (clients == last_clients && running == last_running) return;
+    last_clients = clients;
+    last_running = running;
+
+    lv_obj_t *active = lv_screen_active();
+    if (active == home_screen) refresh_home_tv();
+    else if (active == settings_screen) refresh_settings();
+}
+
 // MARK: - Settings
 //
 // Every row writes through immediately. The protocol timer overrides are the
 // ones that actually change behaviour mid-code, so they are shown as the
 // SECONDS they are, not as a preference with a hidden unit.
-
-static void refresh_settings(void);
 
 /// Applies a changed setting to a running code as well as to the next one —
 /// the timer lengths are the only ones that can matter while compressions are
@@ -926,6 +984,7 @@ static void on_toggle_tv(lv_event_t *event)
     // not claim it is on.
     settings.tv_link_on = wifi_link_running();
     settings_store_save(&settings);
+    refresh_home_tv();
     refresh_settings();
 }
 
@@ -1043,39 +1102,11 @@ static void refresh_settings(void)
     lv_obj_scroll_to_y(settings_list, scroll, LV_ANIM_OFF);
 }
 
-/// Keeps the TV link row honest while the screen is open.
-///
-/// The list is rebuilt only when something is tapped, so a display that joined
-/// a few seconds after the link was switched on left the row reading
-/// "ON · waiting" indefinitely — the one row whose entire job is to say whether
-/// anything connected. It now re-reads while you are looking at it, and only
-/// while you are looking at it.
-static lv_timer_t *settings_poll;
-
-static void on_settings_poll(lv_timer_t *timer)
-{
-    (void)timer;
-    if (lv_screen_active() != settings_screen) return;
-    static int last_clients = -1;
-    static bool last_running;
-    const int clients = wifi_link_clients();
-    const bool running = wifi_link_running();
-    // Only when it actually changed: rebuilding the list every two seconds
-    // would fight the scroll and churn LVGL objects for nothing.
-    if (clients == last_clients && running == last_running) return;
-    last_clients = clients;
-    last_running = running;
-    refresh_settings();
-}
-
 static void on_open_settings(lv_event_t *event)
 {
     (void)event;
     refresh_settings();
     load_screen(settings_screen);
-    if (settings_poll == NULL) {
-        settings_poll = lv_timer_create(on_settings_poll, 2000, NULL);
-    }
 }
 
 static void build_settings(void)
@@ -1309,13 +1340,13 @@ static void build_home(void)
     lv_obj_remove_flag(home_screen, LV_OBJ_FLAG_SCROLLABLE);
     cr_probe_name(home_screen, "home");
 
-    label_at(home_screen, "CODERING", CR_THEME_TEXT_DIM, &cr_font_16, 0, 70, 410);
+    label_at(home_screen, "CODERING", CR_THEME_TEXT_DIM, &cr_font_16, 0, 48, 410);
 
     // The bullseye: START CODE front and centre, Recent and Settings tucked
     // under its lower corners.
     lv_obj_t *start = lv_button_create(home_screen);
-    lv_obj_set_size(start, 210, 210);
-    lv_obj_set_pos(start, 100, 118);
+    lv_obj_set_size(start, 200, 200);
+    lv_obj_set_pos(start, 105, 84);
     lv_obj_set_style_radius(start, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(start, lv_color_hex(CR_THEME_CPR), 0);
     lv_obj_set_style_shadow_width(start, 0, 0);
@@ -1348,8 +1379,8 @@ static void build_home(void)
         if (orbit[i].handler != NULL) {
             lv_obj_add_event_cb(button, orbit[i].handler, LV_EVENT_CLICKED, NULL);
         }
-        lv_obj_set_size(button, 122, 92);
-        lv_obj_set_pos(button, orbit[i].x, 352);
+        lv_obj_set_size(button, 122, 86);
+        lv_obj_set_pos(button, orbit[i].x, 302);
         lv_obj_set_style_radius(button, 24, 0);
         lv_obj_set_style_bg_color(button, lv_color_hex(CR_THEME_SURFACE), 0);
         lv_obj_set_style_shadow_width(button, 0, 0);
@@ -1368,8 +1399,30 @@ static void build_home(void)
         lv_label_set_text(label, orbit[i].title);
         lv_obj_set_style_text_color(label, lv_color_hex(CR_THEME_TEXT_DIM), 0);
         lv_obj_set_style_text_font(label, &cr_font_16, 0);
-        lv_obj_align(label, LV_ALIGN_CENTER, 0, 24);
+        lv_obj_align(label, LV_ALIGN_CENTER, 0, 22);
     }
+
+    // The TV link, across the bottom. Wide rather than square: it is a status
+    // line you read as much as a button you press, and it has to be legible
+    // from wherever the watch is sitting before anyone picks it up.
+    home_tv_button = lv_button_create(home_screen);
+    lv_obj_set_size(home_tv_button, 300, 62);
+    lv_obj_set_pos(home_tv_button, 55, 402);
+    lv_obj_set_style_radius(home_tv_button, 31, 0);
+    lv_obj_set_style_bg_color(home_tv_button, lv_color_hex(CR_THEME_SURFACE), 0);
+    lv_obj_set_style_border_width(home_tv_button, 2, 0);
+    lv_obj_set_style_shadow_width(home_tv_button, 0, 0);
+    lv_obj_add_event_cb(home_tv_button, on_home_tv, LV_EVENT_CLICKED, NULL);
+    cr_probe_name(home_tv_button, "home.tvlink");
+
+    home_tv_label = lv_label_create(home_tv_button);
+    lv_obj_set_style_text_font(home_tv_label, &cr_font_28, 0);
+    lv_obj_center(home_tv_label);
+    refresh_home_tv();
+
+    // Two seconds: a display joining is a Wi-Fi event that arrives well after
+    // the tap that caused it, and nothing else would ever redraw this.
+    lv_timer_create(on_link_poll, 2000, NULL);
 }
 
 void ui_flow_create(cr_engine_t *e, cr_ms_t (*clock)(void))

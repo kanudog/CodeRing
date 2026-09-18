@@ -51,7 +51,13 @@ CONFIG_LV_USE_BUILTIN_MALLOC=n
 # reserved for the DMA-capable allocations only internal RAM can satisfy.
 # LVGL objects are touched at UI rates, not per pixel, so PSRAM's latency does
 # not show.
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+# Zero, not 1024. This is the threshold BELOW which malloc prefers internal
+# RAM, and every LVGL object is a few hundred bytes — so at 1024 all seven
+# screens still landed in the scarce pool the display needs for DMA. That was
+# survivable until the TV link began coming up at boot and Wi-Fi took 57 kB of
+# it. At zero, LVGL lives in PSRAM, which it can afford: its objects are
+# touched at UI rates, not per pixel.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 
 CONFIG_LV_COLOR_DEPTH_16=y
@@ -59,3 +65,14 @@ CONFIG_LV_USE_PERF_MONITOR=n
 # Big timer numerals have to be readable at arm's length.
 CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
+
+# The TV link now comes up at BOOT (the setting is remembered), and the Wi-Fi
+# stack costs 57 kB of INTERNAL RAM — the same scarce pool the display needs
+# for DMA. Measured: internal free after the screens fell from 213 kB to 141 kB
+# the moment the access point started at startup, and the panel went back to
+# failing flushes and showing bands of the previous screen.
+#
+# So Wi-Fi and lwIP buffers go to PSRAM where they can, and the buffer counts
+# come down to what one client fetching a small JSON page actually needs
+# instead of the defaults, which are sized for a busy station.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
