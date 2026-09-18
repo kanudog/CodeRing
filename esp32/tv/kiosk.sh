@@ -50,7 +50,14 @@ NETWORK="${CODERING_NETWORK:-codering-tv}"
     while :; do
         if ! nmcli -t -f NAME connection show --active 2>/dev/null | grep -qx "$NETWORK"; then
             nmcli device wifi rescan >/dev/null 2>&1
-            nmcli connection up "$NETWORK" >/dev/null 2>&1
+            # ONLY when the watch is actually on the air. Asking unconditionally
+            # meant this kept pulling the Pi off whatever network it HAD — the
+            # maintenance hotspot — to chase an access point that was switched
+            # off, so it never settled anywhere long enough to be reached. The
+            # one time that matters is the time you need to shut it down.
+            if nmcli -t -f SSID dev wifi list 2>/dev/null | grep -qx "$NETWORK"; then
+                nmcli connection up "$NETWORK" >/dev/null 2>&1
+            fi
         fi
         sleep 5
     done
