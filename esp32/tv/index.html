@@ -144,19 +144,59 @@ svg.ring circle { fill:none; stroke-linecap:round; }
 .ev.newest .evstamp { font-size:calc(var(--u)*2.9); color:var(--text); }
 .empty { font-size:calc(var(--u)*2.8); color:var(--dim); font-weight:700; }
 .overdue { color:var(--med) !important; }
+
+/* ---- the handoff summary --------------------------------------------- */
+/* Shown once the code has ended. It replaces the contents of the first three
+   columns and LEAVES THE TIMELINE ALONE — the full history is already what a
+   handoff wants, so it does not need rebuilding into a second widget. */
+#howLong {
+  font-size:calc(var(--u)*3.0); font-weight:800; letter-spacing:.1em;
+  padding:.5vmin 2vmin; border-radius:99px;
+  background:var(--surface-hi); color:var(--dim); display:none;
+}
+#banner { font-size:calc(var(--u)*5.2); font-weight:900; letter-spacing:.08em;
+          line-height:1.05; }
+#bigDuration { font-size:calc(var(--u)*13); font-weight:900; line-height:1;
+               margin-top:1.5vmin; letter-spacing:-.02em; }
+.srow { display:flex; align-items:baseline; gap:1.2vmin; margin-top:1.6vmin; }
+.skey { font-size:calc(var(--u)*2.5); font-weight:800; letter-spacing:.14em;
+        color:var(--dim); flex:1 1 auto; white-space:nowrap; }
+.sval { font-size:calc(var(--u)*4.2); font-weight:900; }
+.ssub { font-size:calc(var(--u)*2.4); font-weight:700; color:var(--dim);
+        text-align:right; margin-top:.3vmin; }
+.srow { flex-wrap:nowrap; }
+.mrow { display:flex; align-items:baseline; gap:1.2vmin; margin-top:1.3vmin; }
+.mname { font-size:calc(var(--u)*3.2); font-weight:800; flex:1 1 auto; }
+.mcount { font-size:calc(var(--u)*3.4); font-weight:900; color:var(--dim); }
+
+/* The screen after the handoff window closes. Deliberately almost empty: a
+   bright dashboard left up for hours is burn-in on an OLED and noise in a
+   room that has moved on. */
+#idle { position:fixed; inset:0; background:var(--bg); display:none;
+        place-items:center; z-index:10; }
+#idle span { font-size:calc(var(--u)*3.4); font-weight:800; letter-spacing:.3em;
+             color:var(--dim); }
 </style>
 
 <header>
   <span id="protocol">—</span>
   <span id="patient"></span>
   <span id="stale">FEED LOST</span>
+  <span id="howLong">ON SCREEN 10:00</span>
   <span id="state">STANDBY</span>
 </header>
 
 <main>
   <section class="card">
-    <span class="label" id="ringLabel">NEXT PULSE CHECK</span>
-    <div class="ringwrap">
+    <div class="ended" id="outcomeCard" style="display:none">
+      <span class="label">OUTCOME</span>
+      <div id="banner">CODE ENDED</div>
+      <div id="bigDuration">0:00</div>
+      <div class="srow"><span class="skey">CPR FRACTION</span><span class="sval" id="sCpr">—</span></div>
+      <div class="srow"><span class="skey">PAUSES</span><span class="sval" id="sPauses">—</span></div>
+    </div>
+    <span class="label live" id="ringLabel">NEXT PULSE CHECK</span>
+    <div class="ringwrap live">
       <svg class="ring" viewBox="0 0 100 100">
         <circle cx="50" cy="50" r="42" stroke="var(--track)" stroke-width="7"></circle>
         <circle id="ringArc" cx="50" cy="50" r="42" stroke="var(--cpr)" stroke-width="7"
@@ -171,9 +211,18 @@ svg.ring circle { fill:none; stroke-linecap:round; }
   </section>
 
   <section class="card">
-    <span class="label">TOTAL CODE</span>
-    <div id="totalClock">0:00</div>
-    <div id="epiRow">
+    <div class="ended" id="handoffCard" style="display:none">
+      <span class="label">HANDOFF</span>
+      <div class="srow"><span class="skey">ARREST</span><span class="sval" id="hArrest">—</span></div>
+      <div class="srow"><span class="skey">TO 1st EPI</span><span class="sval" id="hFirstEpi">—</span></div>
+      <div class="srow"><span class="skey">EPI</span><span class="sval" id="hEpi">—</span></div>
+      <div class="ssub" id="hEpiAgo"></div>
+      <div class="srow"><span class="skey">SHOCKS</span><span class="sval" id="hShocks">—</span></div>
+      <div class="srow"><span class="skey">RHYTHM ✓</span><span class="sval" id="hRhythm">—</span></div>
+    </div>
+    <span class="label live">TOTAL CODE</span>
+    <div id="totalClock" class="live">0:00</div>
+    <div id="epiRow" class="live">
       <div class="label" id="epiSubLabel">EPI</div>
       <div id="epiClock">—</div>
       <div id="epiSub">no dose given</div>
@@ -181,8 +230,12 @@ svg.ring circle { fill:none; stroke-linecap:round; }
   </section>
 
   <section class="card">
-    <span class="label">TIME SINCE LAST</span>
-    <div id="timers"><span class="empty">nothing given yet</span></div>
+    <div class="ended" id="medsCard" style="display:none">
+      <span class="label">MEDS GIVEN</span>
+      <div id="medTally"></div>
+    </div>
+    <span class="label live" id="sinceLabel">TIME SINCE LAST</span>
+    <div id="timers" class="live"><span class="empty">nothing given yet</span></div>
   </section>
 
   <section class="card">
@@ -190,6 +243,8 @@ svg.ring circle { fill:none; stroke-linecap:round; }
     <div id="log"><span class="empty">no events</span></div>
   </section>
 </main>
+
+<div id="idle"><span>CODERING</span></div>
 
 <script>
 "use strict";
@@ -248,10 +303,84 @@ function render() {
      the engine, which stops advancing elapsedMs once endMs is set). */
   $("totalClock").textContent = clock(c.elapsedMs + (st.ended ? 0 : d));
 
-  centrePanel(c, st, d);
-  epiPanel(s, st, d);
-  timerPanel(s, d);
+  /* Ended: the three live columns become the handoff. The timeline is left
+     exactly as it is — the full history IS what a handoff wants, so there is
+     nothing to rebuild. */
+  const handoffLeft = handoffRemaining(s, d);
+  const showing = st.ended && handoffLeft > 0;
+  document.querySelectorAll(".live").forEach(el => el.style.display = showing ? "none" : "");
+  document.querySelectorAll(".ended").forEach(el => el.style.display = showing ? "" : "none");
+  /* An explicit value, not "": clearing an inline style falls back to the
+     stylesheet, and the stylesheet says display:none for this pill. */
+  $("howLong").style.display = showing ? "inline-block" : "none";
+  /* The window has closed: stop showing a dashboard nobody is reading. */
+  $("idle").style.display = (st.ended && handoffLeft <= 0) ? "grid" : "none";
+
+  if (showing) {
+    $("howLong").textContent = "ON SCREEN " + clock(handoffLeft);
+    handoffPanel(s, d);
+  } else {
+    centrePanel(c, st, d);
+    epiPanel(s, st, d);
+    timerPanel(s, d);
+  }
   logPanel(s);
+}
+
+/* How long the handoff stays up. Anchored to the moment the code ENDED, not
+   to when this page loaded — so a reload, a browser restart or a Pi reboot
+   mid-window resumes the same countdown instead of granting another ten
+   minutes. The engine's own discipline: store the anchor, derive the rest. */
+const HANDOFF_MS = 10 * 60 * 1000;
+function handoffRemaining(s, d) {
+  if (!s.state.ended || s.session.endMs === null) return 0;
+  return HANDOFF_MS - ((s.nowMs + d) - s.session.endMs);
+}
+
+function handoffPanel(s, d) {
+  const st = s.stats, rosc = s.session.roscMs !== null;
+
+  $("banner").textContent = rosc ? "ROSC ACHIEVED" : "CODE ENDED";
+  $("banner").style.color = rosc ? "var(--rosc)" : "var(--text)";
+  $("bigDuration").textContent = clock(st.totalMs);
+  $("sCpr").textContent = Math.round(st.cprFraction * 100) + "%";
+  $("sPauses").textContent = String(st.pauseCount);
+
+  /* Offsets, not wall-clock times. The watch's handoff card can say "ROSC at
+     14:32:06" because it has a real clock; this board's is stamped in at
+     build time until M5 brings up the RTC, and a confidently wrong wall time
+     on a handoff screen is worse than none. +m:ss into the code is
+     unambiguous on any device. */
+  /* The arrest is start → ROSC when there was one, and the whole code when
+     there was not — so it never duplicates the total above it. */
+  const arrest = st.secondsToRosc !== null ? st.secondsToRosc * 1000 : st.totalMs;
+  $("hArrest").textContent = clock(arrest);
+  $("hArrest").style.color = st.secondsToRosc !== null ? "var(--rosc)" : "var(--text)";
+  $("hFirstEpi").textContent =
+      st.secondsToFirstEpi === null ? "—" : "+" + clock(st.secondsToFirstEpi * 1000);
+
+  /* The count from the tally, the elapsed from the same running-timer row the
+     live screen uses, so the two can never disagree. On its own line: "×2 —
+     last 9:47 ago" wrapped the row and broke the column's alignment. */
+  const epiTimer = (s.timers || []).find(t => /epi/i.test(t.title));
+  $("hEpi").textContent = "×" + st.epiCount;
+  $("hEpiAgo").textContent = (st.epiCount > 0 && epiTimer)
+      ? "last " + clock(epiTimer.elapsedMs + d) + " ago" : "";
+  $("hShocks").textContent = "×" + st.shockCount;
+  $("hRhythm").textContent = "×" + st.rhythmCheckCount;
+
+  const box = $("medTally");
+  if (!st.meds.length) { box.innerHTML = '<span class="empty">none given</span>'; return; }
+  box.innerHTML = "";
+  for (const m of st.meds) {
+    const row = document.createElement("div"); row.className = "mrow";
+    const name = document.createElement("span"); name.className = "mname";
+    name.textContent = m.title;
+    const n = document.createElement("span"); n.className = "mcount";
+    n.textContent = "×" + m.count;
+    row.append(name, n);
+    box.append(row);
+  }
 }
 
 /* The ring shows whichever countdown the current state is about. Post-ROSC

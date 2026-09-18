@@ -31,6 +31,23 @@ been done, in what order".
 | time since last | everything given, with how many |
 | timeline | the whole log, newest at TOP, colour-coded, doses included |
 
+## After the code ends
+
+The three live columns become a handoff summary — outcome, the numbers a
+receiving team asks for, every drug with its count — and the timeline column is
+left exactly as it is, because the full history already IS what a handoff
+wants. It stays up for ten minutes, then the screen goes quiet.
+
+The countdown is anchored to the moment the code **ended**, not to when the
+page loaded, so a reload, a browser restart or a Pi reboot mid-window resumes
+the same countdown instead of granting another ten minutes. Same discipline as
+the engine: store the anchor, derive the rest.
+
+Times here are offsets (`+m:ss` into the code), not wall-clock. The watch's
+handoff card can say "ROSC at 14:32:06" because it has a real clock; this
+board's is stamped in at build time until M5 brings up the RTC, and a
+confidently wrong wall time on a handoff screen is worse than none.
+
 Two behaviours worth keeping if this is ever rewritten:
 
 - **It counts locally between polls.** The snapshot carries integer ms for
