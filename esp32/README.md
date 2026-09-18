@@ -179,11 +179,42 @@ Read off the unit itself with esptool, not from the datasheet:
     check mark, so that one glyph comes from DejaVu, which ships in the same
     LVGL component. Changing the label was not an option; the font is what
     changes (see `tools/make_fonts.sh`).
-- **NEXT — M4, audio:** the metronome (already audio-only on the watch) and the
-  cue model that replaces haptics. The I2C scan confirms an ES8311 codec at
-  0x18 and an ES7210 mic ADC at 0x40 — and **no haptic driver at 0x5A**, so
-  the tick felt on a tap is the speaker or the panel, not a motor.
-- **M5** — persistence (NVS + RTC), CSV to the TF card, and the TV link.
+- **M5 — it remembers, and it serves the TV, done** (on the watch, 2026-09-18).
+  - **The clock.** `core/cr_clock.*` is the civil-date arithmetic, in core so
+    `make test` can walk every day of a leap year; `firmware/main/cr_rtc.*`
+    drives the PCF85063 the boot scan has reported at 0x51 since M2. It
+    anchors the engine's clock ONCE at boot and lets esp_timer count, because
+    invariant 4 says the clock never goes backwards. Without a real clock a
+    list of saved codes cannot say which one is most recent, so this came
+    first.
+  - **Saved codes.** `cr_archive.*` encodes a session to a couple of kB rather
+    than the 96 kB it occupies in RAM, by writing only the event and pause
+    slots actually used — explicit little-endian fields, so adding a field to
+    `cr_session_t` later cannot silently misread every code already saved. A
+    damaged file is refused four ways; the tests truncate a good one at every
+    seventh byte and require all of them to fail.
+  - **Recents** lists the last twelve by date, and opens the same summary
+    screen a code ends on — which is how the watch reuses `SummaryView`.
+    CLEAR wipes them, behind a confirmation, because nothing syncs them
+    anywhere yet.
+  - **Settings** writes through to NVS on every tap, as the same JSON the
+    phone writes. Timer overrides apply to the running code as well as the
+    next one.
+  - **The TV link.** The watch runs the access point and serves
+    `esp32/tv/index.html` — EMBEDDED in the binary, so the file `make preview`
+    serves on a laptop is byte-for-byte the file the watch serves in the bay —
+    plus `cr_snapshot_json` at `/api/snapshot`. Off by default: a SoftAP plus
+    this AMOLED is the most expensive thing this board can do to its battery.
+- **NEXT — M4, audio.** Nothing of it is built. The metronome (already
+  audio-only on the watch), the four cue rhythms `cr_settings` already models,
+  and alerts that persist or escalate until acknowledged — a haptic fires once,
+  a tone can be missed. The I2C scan confirms an ES8311 codec at 0x18 and an
+  ES7210 mic ADC at 0x40 — and **no haptic driver at 0x5A**, so the tick felt
+  on a tap is the speaker or the panel, not a motor. Three controls are wired
+  to nothing until it lands: the speaker button on the live screen and the two
+  Settings rows marked "(M4)".
+- **Later** — CSV to the TF card (`BSP_CAPS_SDCARD` says the slot is there),
+  and pairing with the phone.
   Recent and Settings on the home screen are drawn but inert until then.
 
 ## Things that only showed up on the hardware
@@ -205,6 +236,21 @@ Worth knowing before adding screens, because none of these fail a test:
   ~156 kB, and the overflow crashed inside glyph drawing — a white screen
   and a reboot loop. `CONFIG_LV_USE_CLIB_MALLOC=y` puts LVGL on the system
   heap; boot logs report free memory afterwards.
+- **…and then the C allocator put all of it in INTERNAL RAM**, because
+  `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` defaults to 16 kB and every LVGL
+  object is smaller. M5's extra screens pushed internal RAM low enough that
+  the panel could no longer get a DMA buffer, and *a failed flush is silent*:
+  half the screen kept the previous screen's pixels and it looked like two
+  screens fighting, not like a memory problem. Small allocations now prefer
+  PSRAM and 64 kB of internal RAM is reserved for DMA. `load_screen()` logs
+  internal, DMA-capable and PSRAM free on every screen change, because this
+  failure leaves no other trace.
+- **Nothing puts a `cr_session_t` on a stack.** It is ~96 kB. On the host,
+  where the suite runs with megabyte stacks, a local copy is invisible; on
+  the UI task it is an instant overflow. `cr_archive_peek` had one, and
+  opening Recents — which peeks once per saved file — rebooted the board on
+  the first one while every test stayed green. A host test sees what a
+  function returns, not the stack it needed to return it.
 - **`LV_SYMBOL_*` and `lv_label_set_text_fmt("%.1f")` both come from LVGL's
   own builds** — the symbol font our custom font replaced, and a printf
   compiled without float support. They render empty boxes and a bare "f".
