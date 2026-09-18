@@ -863,11 +863,6 @@ static void on_toggle_screen(lv_event_t *e)
 {
     (void)e; settings.keep_screen_on = !settings.keep_screen_on; settings_changed();
 }
-static void on_toggle_tap_only(lv_event_t *e)
-{
-    (void)e; settings.menu_tap_only = !settings.menu_tap_only; settings_changed();
-}
-
 /// Cycles through the lengths a person would actually pick, then back to the
 /// protocol's own. A stepper beats a dial here: there are four sensible
 /// answers and no reason to let someone set 137 seconds.
@@ -913,8 +908,7 @@ static void on_toggle_tv(lv_event_t *event)
 static void on_clock_nudge(lv_event_t *event)
 {
     const int minutes = (int)(intptr_t)lv_event_get_user_data(event);
-    int64_t now = clock_ms() / 1000;
-    cr_rtc_write(now + minutes * 60);
+    cr_rtc_adjust_seconds(minutes * 60);
     refresh_settings();
 }
 
@@ -951,36 +945,15 @@ static void seconds_label(char *buf, size_t cap, cr_ms_t override, int fallback)
 
 static void refresh_settings(void)
 {
+    // Every tap rebuilds the list, which resets the scroll — so a row below the
+    // fold threw the screen back to the top the moment you touched it, and the
+    // clock nudge was unusable. Keep the position across the rebuild.
+    const int32_t scroll = lv_obj_get_scroll_y(settings_list);
     lv_obj_clean(settings_list);
     char value[24];
 
-    settings_row("Alert tones", settings.cues_enabled ? "ON" : "OFF",
-                 settings.cues_enabled ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
-                 on_toggle_cues, NULL, "set.cues");
-    settings_row("Metronome sound", settings.metronome_sound_on ? "ON" : "OFF",
-                 settings.metronome_sound_on ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
-                 on_toggle_sound, NULL, "set.sound");
-    settings_row("Keep screen on", settings.keep_screen_on ? "ON" : "OFF",
-                 settings.keep_screen_on ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
-                 on_toggle_screen, NULL, "set.screen");
-    settings_row("Tap-only menus", settings.menu_tap_only ? "ON" : "OFF",
-                 settings.menu_tap_only ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
-                 on_toggle_tap_only, NULL, "set.taponly");
-
-    // The protocol's own lengths when nothing is overridden, so the row always
-    // says what the device will actually do rather than "default".
-    seconds_label(value, sizeof value, settings.cycle_override_ms, 120);
-    settings_row("CPR cycle", value,
-                 settings.cycle_override_ms == CR_TIME_NONE ? CR_THEME_TEXT_DIM : CR_THEME_CPR,
-                 on_cycle_length, NULL, "set.cycle");
-    seconds_label(value, sizeof value, settings.interval_override_ms, 180);
-    settings_row("Drug interval", value,
-                 settings.interval_override_ms == CR_TIME_NONE ? CR_THEME_TEXT_DIM : CR_THEME_MED,
-                 on_interval_length, NULL, "set.interval");
-
-    // The TV link says what it is actually doing, including whether anything
-    // has joined — an access point nobody can see is indistinguishable from a
-    // broken one, and this is the row that tells them apart.
+    // The TV link first: it is the row anyone comes to this screen looking for,
+    // and it was buried below the fold on a list that gives no hint it scrolls.
     if (wifi_link_running()) {
         const int n = wifi_link_clients();
         if (n > 0) snprintf(value, sizeof value, "ON · %d", n);
@@ -996,13 +969,39 @@ static void refresh_settings(void)
         settings_row("   then open", "192.168.4.1", CR_THEME_TEXT_DIM, NULL, NULL, NULL);
     }
 
+    // These two store a preference that nothing plays yet: there is no audio
+    // path until M4. Saying so beats a toggle that looks live and is not.
+    settings_row("Alert tones (M4)", settings.cues_enabled ? "on" : "off",
+                 CR_THEME_TEXT_DIM, on_toggle_cues, NULL, "set.cues");
+    settings_row("Metronome (M4)", settings.metronome_sound_on ? "on" : "off",
+                 CR_THEME_TEXT_DIM, on_toggle_sound, NULL, "set.sound");
+    settings_row("Keep screen on", settings.keep_screen_on ? "ON" : "OFF",
+                 settings.keep_screen_on ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
+                 on_toggle_screen, NULL, "set.screen");
+
+    // The protocol's own lengths when nothing is overridden, so the row always
+    // says what the device will actually do rather than "default".
+    seconds_label(value, sizeof value, settings.cycle_override_ms, 120);
+    settings_row("CPR cycle", value,
+                 settings.cycle_override_ms == CR_TIME_NONE ? CR_THEME_TEXT_DIM : CR_THEME_CPR,
+                 on_cycle_length, NULL, "set.cycle");
+    seconds_label(value, sizeof value, settings.interval_override_ms, 180);
+    settings_row("Drug interval", value,
+                 settings.interval_override_ms == CR_TIME_NONE ? CR_THEME_TEXT_DIM : CR_THEME_MED,
+                 on_interval_length, NULL, "set.interval");
+
     const cr_civil_t c = cr_civil_from_epoch_s(clock_ms() / 1000);
     cr_format_stamp(value, sizeof value, &c);
     settings_row("Clock", value, CR_THEME_TEXT_DIM, NULL, NULL, "set.clock");
-    settings_row("   clock  −1 min", "−1", CR_THEME_TEXT_DIM,
+    // ASCII hyphen, not U+2212 MINUS SIGN: the generated fonts carry the dashes
+    // the watch's own strings need and not that one, and a missing glyph draws
+    // as a filled box — which is exactly what it did here.
+    settings_row("   clock  -1 min", "-1", CR_THEME_TEXT_DIM,
                  on_clock_nudge, (void *)(intptr_t)-1, "set.clockdown");
     settings_row("   clock  +1 min", "+1", CR_THEME_TEXT_DIM,
                  on_clock_nudge, (void *)(intptr_t)1, "set.clockup");
+
+    lv_obj_scroll_to_y(settings_list, scroll, LV_ANIM_OFF);
 }
 
 static void on_open_settings(lv_event_t *event)

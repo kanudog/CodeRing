@@ -5,6 +5,7 @@
 #include "bsp/esp32_s3_touch_amoled_2_06.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "cr_clock.h"
 
@@ -118,4 +119,47 @@ bool cr_rtc_write(int64_t epoch_s)
              (int)c.year, (int)c.month, (int)c.day,
              (int)c.hour, (int)c.minute, (int)c.second);
     return true;
+}
+
+// MARK: - The device clock
+
+/// Local epoch ms at the instant esp_timer read zero. Set once, at boot.
+static int64_t epoch_at_boot_ms;
+
+cr_ms_t cr_rtc_now_ms(void)
+{
+    return (cr_ms_t)(epoch_at_boot_ms + esp_timer_get_time() / 1000);
+}
+
+void cr_rtc_start_clock(int64_t fallback_epoch_s)
+{
+    int64_t seconds = 0;
+    if (cr_rtc_init() != ESP_OK) {
+        ESP_LOGW(TAG, "no RTC — falling back to the build stamp");
+        epoch_at_boot_ms = fallback_epoch_s * 1000;
+        return;
+    }
+    if (!cr_rtc_read(&seconds)) {
+        ESP_LOGW(TAG, "RTC unset — seeding it from the build stamp, once");
+        cr_rtc_write(fallback_epoch_s);
+        if (!cr_rtc_read(&seconds)) seconds = fallback_epoch_s;
+    }
+    // Subtract what esp_timer has already counted during boot, so the two
+    // clocks agree about this instant rather than about app_main's start.
+    epoch_at_boot_ms = seconds * 1000 - esp_timer_get_time() / 1000;
+
+    const cr_civil_t c = cr_civil_from_epoch_s(seconds);
+    ESP_LOGI(TAG, "clock: %04d-%02d-%02d %02d:%02d:%02d (local)",
+             (int)c.year, (int)c.month, (int)c.day,
+             (int)c.hour, (int)c.minute, (int)c.second);
+}
+
+bool cr_rtc_adjust_seconds(int delta)
+{
+    // Move the ANCHOR as well as the chip. Writing only the chip left the
+    // screen showing the old time until the next reboot, which reads as a
+    // button that does nothing.
+    const int64_t target = cr_rtc_now_ms() / 1000 + delta;
+    epoch_at_boot_ms += (int64_t)delta * 1000;
+    return cr_rtc_write(target);
 }

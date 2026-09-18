@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "cr_time.h"
 #include "esp_err.h"
 
 /// Claims the device on the BSP's I2C bus. Call after bsp_i2c_init().
@@ -27,3 +28,17 @@ bool cr_rtc_read(int64_t *epoch_s);
 
 /// Sets the clock and clears the oscillator-stop flag.
 bool cr_rtc_write(int64_t epoch_s);
+
+/// Anchors the device clock to the RTC, seeding the RTC from `fallback_epoch_s`
+/// if it has never been set. Call once, after the I2C bus is up.
+void cr_rtc_start_clock(int64_t fallback_epoch_s);
+
+/// Local epoch MILLISECONDS — the only clock the engine is ever given.
+/// Anchored to the RTC once and advanced by esp_timer, never re-read: the
+/// engine's clock must not jump backwards (invariant 4), and an RTC read that
+/// came back a tick early would rewind every anchor in a running code.
+cr_ms_t cr_rtc_now_ms(void);
+
+/// Moves the clock by `delta` seconds — both the chip and the running anchor,
+/// so the change shows on screen immediately rather than after a reboot.
+bool cr_rtc_adjust_seconds(int delta);

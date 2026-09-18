@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "lvgl.h"
 
+#include "cr_clock.h"
 #include "cr_defaults.h"
 #include "cr_layout.h"
 #include "cr_menu.h"
@@ -24,12 +25,6 @@ static const char *TAG = "ui";
 static const float cr_font_16_px = 16.0f;
 
 #define MAX_DEPTH 3
-
-/// Stamped in by the build (firmware/main/CMakeLists.txt). Zero when it is
-/// not, which shows a clock counting from midnight rather than a wrong one.
-#ifndef CR_BUILD_LOCAL_EPOCH
-#define CR_BUILD_LOCAL_EPOCH 0
-#endif
 
 /// The bottom of this panel is not fully visible the way the watch face was
 /// — the anchor pucks and the clock row sat slightly cut off. Everything in
@@ -458,14 +453,18 @@ static struct {
 static lv_obj_t *sheet_row(lv_obj_t *parent, const char *label, const char *value,
                            uint32_t color);
 
-/// The wall clock, the same way the live screen derives it: stamped at build
-/// time and advanced by the monotonic clock. M5's RTC makes it survive a
-/// reboot; until then a reflash is what sets it.
+/// The wall clock. `now` IS local epoch milliseconds — it comes from the RTC —
+/// so this only has to split it into fields.
+///
+/// It used to add CR_BUILD_LOCAL_EPOCH to `now`, which was right when `now`
+/// was milliseconds since boot and became nonsense the moment the RTC started
+/// anchoring it: two absolute times added together, wrapped by the % 24 into a
+/// plausible-looking wrong hour. It read three hours fast on the wrist while
+/// the Settings clock — which never went through here — read correctly.
 static void wall_clock_text(char *buf, size_t cap, cr_ms_t now)
 {
-    const int64_t wall = (int64_t)CR_BUILD_LOCAL_EPOCH + now / 1000;
-    snprintf(buf, cap, "%d:%02d:%02d", (int)((wall / 3600) % 24),
-             (int)((wall / 60) % 60), (int)(wall % 60));
+    const cr_civil_t c = cr_civil_from_epoch_s(now / 1000);
+    snprintf(buf, cap, "%d:%02d:%02d", (int)c.hour, (int)c.minute, (int)c.second);
 }
 
 /// The handoff card: everything PICU or transport asks for on the phone, in

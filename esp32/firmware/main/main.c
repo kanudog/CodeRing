@@ -34,48 +34,6 @@ EXT_RAM_BSS_ATTR static cr_engine_t engine;
 #define CR_BUILD_LOCAL_EPOCH 0
 #endif
 
-/// Local epoch ms at the instant esp_timer read zero. Set once, at boot, from
-/// the RTC — and then never touched, which is the whole point: the engine's
-/// clock must never jump backwards (cr_time.h), so the RTC ANCHORS it rather
-/// than driving it. esp_timer does the counting; a second RTC read that came
-/// back a tick earlier would rewind every anchor in a running code.
-static int64_t epoch_at_boot_ms;
-
-/// The engine reads no clock of its own (invariant 4); this is the only place
-/// time comes from. Now RTC-anchored epoch ms, so timestamps survive a reboot
-/// and a saved code can say when it happened.
-static cr_ms_t now_ms(void)
-{
-    return (cr_ms_t)(epoch_at_boot_ms + esp_timer_get_time() / 1000);
-}
-
-/// Reads the clock, and seeds it from the build stamp the first time — a
-/// board fresh off the bench has never had its RTC set, and one that has
-/// simply keeps time across reboots and reflashes.
-static void start_clock(void)
-{
-    if (cr_rtc_init() != ESP_OK) {
-        ESP_LOGW(TAG, "no RTC — falling back to the build stamp");
-        epoch_at_boot_ms = (int64_t)CR_BUILD_LOCAL_EPOCH * 1000;
-        return;
-    }
-
-    int64_t seconds = 0;
-    if (!cr_rtc_read(&seconds)) {
-        ESP_LOGW(TAG, "RTC unset — seeding it from the build stamp, once");
-        cr_rtc_write((int64_t)CR_BUILD_LOCAL_EPOCH);
-        if (!cr_rtc_read(&seconds)) seconds = (int64_t)CR_BUILD_LOCAL_EPOCH;
-    }
-    // Subtract what esp_timer has already counted during boot, so the two
-    // clocks agree about this instant rather than about app_main's start.
-    epoch_at_boot_ms = seconds * 1000 - esp_timer_get_time() / 1000;
-
-    const cr_civil_t c = cr_civil_from_epoch_s(seconds);
-    ESP_LOGI(TAG, "clock: %04d-%02d-%02d %02d:%02d:%02d (local)",
-             (int)c.year, (int)c.month, (int)c.day,
-             (int)c.hour, (int)c.minute, (int)c.second);
-}
-
 static void tick_cb(lv_timer_t *timer)
 {
     (void)timer;
@@ -135,7 +93,9 @@ void app_main(void)
     // point — every event, every saved code — is dated from the RTC, so the
     // clock has to be anchored BEFORE the engine is built.
     settings_store_init();      // before the UI: it loads settings as it builds
-    start_clock();
+    // Everything timestamped from here on — every event, every saved code — is
+    // dated from the RTC, so the clock is anchored before the engine is built.
+    cr_rtc_start_clock((int64_t)CR_BUILD_LOCAL_EPOCH);
 
     // A placeholder engine so the live screen has something to draw before a
     // code exists. The real one is built when START CODE is tapped: the code
@@ -147,13 +107,13 @@ void app_main(void)
     patient.source = CR_WEIGHT_MANUAL;
     cr_engine_init(&engine, &cr_protocol_pals_arrest, &cr_pals_drug_set,
                    cr_builtin_events, cr_builtin_event_count,
-                   &patient, now_ms(), "DEVICE-0001", "codering-esp32");
+                   &patient, cr_rtc_now_ms(), "DEVICE-0001", "codering-esp32");
 
     // The BSP drives LVGL from its own task, so everything that touches it
     // runs under the same lock.
     bsp_display_lock(0);
-    ui_create(&engine, now_ms);
-    ui_flow_create(&engine, now_ms);
+    ui_create(&engine, cr_rtc_now_ms);
+    ui_flow_create(&engine, cr_rtc_now_ms);
     ui_tick();
     ui_flow_show_home();
     lv_timer_create(tick_cb, 100, NULL);
