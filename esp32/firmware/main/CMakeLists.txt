@@ -18,12 +18,13 @@ math(EXPR BUILD_LOCAL_EPOCH "${BUILD_EPOCH} + ${TZ_SECONDS}")
 file(GLOB ICON_SRCS ${CMAKE_CURRENT_LIST_DIR}/icons/*.c)
 
 idf_component_register(
-    SRCS "main.c" "ui_probe.c" "ui_screen.c" "ui_flow.c" "cr_rtc.c" "session_store.c"
+    SRCS "main.c" "ui_probe.c" "ui_screen.c" "ui_flow.c" "cr_rtc.c" "session_store.c" "settings_store.c" "wifi_link.c"
          "fonts/cr_font_16.c" "fonts/cr_font_28.c" "fonts/cr_font_48.c"
          ${ICON_SRCS}
     INCLUDE_DIRS "." "fonts" "icons"
+    EMBED_FILES "${CMAKE_CURRENT_LIST_DIR}/../../tv/index.html"
     REQUIRES codering_core
-    PRIV_REQUIRES esp_timer esp_driver_gpio spiffs nvs_flash
+    PRIV_REQUIRES esp_timer esp_driver_gpio spiffs nvs_flash esp_wifi esp_http_server
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE CR_BUILD_LOCAL_EPOCH=${BUILD_LOCAL_EPOCH})

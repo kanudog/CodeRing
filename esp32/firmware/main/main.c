@@ -20,6 +20,7 @@
 #include "cr_engine.h"
 #include "cr_rtc.h"
 #include "session_store.h"
+#include "settings_store.h"
 #include "ui_flow.h"
 #include "ui_probe.h"
 #include "ui_screen.h"
@@ -133,6 +134,7 @@ void app_main(void)
     // The bus is up, so the clock can be. Everything timestamped after this
     // point — every event, every saved code — is dated from the RTC, so the
     // clock has to be anchored BEFORE the engine is built.
+    settings_store_init();      // before the UI: it loads settings as it builds
     start_clock();
 
     // A placeholder engine so the live screen has something to draw before a

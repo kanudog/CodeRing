@@ -15,15 +15,19 @@
 
 #include "cr_defaults.h"
 #include "cr_engine.h"
+#include "cr_rtc.h"
 #include "cr_layout.h"
 #include "cr_clock.h"
 #include "cr_patient.h"
 #include "cr_session.h"
+#include "cr_settings.h"
 #include "cr_text.h"
 #include "cr_theme.h"
 #include "fonts/cr_fonts.h"
 #include "icons/cr_icons.h"
 #include "session_store.h"
+#include "settings_store.h"
+#include "wifi_link.h"
 #include "ui_flow.h"
 #include "ui_probe.h"
 #include "ui_screen.h"
@@ -44,6 +48,12 @@ static lv_obj_t *summary_screen;
 static lv_obj_t *summary_banner, *summary_banner_label, *summary_list, *summary_when;
 static lv_obj_t *summary_done_label;
 static lv_obj_t *recents_screen, *recents_list, *recents_empty;
+static lv_obj_t *settings_screen, *settings_list;
+
+/// The live settings. Loaded once at boot, written back on every change —
+/// there is no Save button, because a settings screen you can leave without
+/// committing is a settings screen that lies about what the device will do.
+static cr_settings_t settings;
 
 /// Which session the summary is showing. The live one when a code has just
 /// ended, or a copy loaded from flash when browsing Recents — the watch does
@@ -224,7 +234,11 @@ static void on_start_code(lv_event_t *event)
         patient.age_months = (int16_t)age_months;
     }
 
-    cr_engine_init(engine, chosen_protocol, &cr_pals_drug_set,
+    // The user's timer overrides apply to the code about to start, which is
+    // the whole point of having them.
+    const cr_protocol_t configured = cr_protocol_applying(
+        chosen_protocol, settings.cycle_override_ms, settings.interval_override_ms);
+    cr_engine_init(engine, &configured, &cr_pals_drug_set,
                    cr_builtin_events, cr_builtin_event_count,
                    &patient, clock_ms(), "DEVICE-0001", "codering-esp32");
     ui_tick();
@@ -798,6 +812,218 @@ void ui_flow_show_summary(void)
     }
 }
 
+// MARK: - Settings
+//
+// Every row writes through immediately. The protocol timer overrides are the
+// ones that actually change behaviour mid-code, so they are shown as the
+// SECONDS they are, not as a preference with a hidden unit.
+
+static void refresh_settings(void);
+
+/// Applies a changed setting to a running code as well as to the next one —
+/// the timer lengths are the only ones that can matter while compressions are
+/// happening, and a user who lengthens the cycle expects THIS cycle to follow.
+static void settings_changed(void)
+{
+    settings_store_save(&settings);
+    if (engine != NULL) {
+        const cr_protocol_t updated = cr_protocol_applying(
+            &cr_protocol_pals_arrest, settings.cycle_override_ms, settings.interval_override_ms);
+        cr_engine_change_protocol(engine, &updated);
+    }
+    refresh_settings();
+}
+
+static void on_toggle_cues(lv_event_t *e)
+{
+    (void)e; settings.cues_enabled = !settings.cues_enabled; settings_changed();
+}
+static void on_toggle_sound(lv_event_t *e)
+{
+    (void)e; settings.metronome_sound_on = !settings.metronome_sound_on; settings_changed();
+}
+static void on_toggle_screen(lv_event_t *e)
+{
+    (void)e; settings.keep_screen_on = !settings.keep_screen_on; settings_changed();
+}
+static void on_toggle_tap_only(lv_event_t *e)
+{
+    (void)e; settings.menu_tap_only = !settings.menu_tap_only; settings_changed();
+}
+
+/// Cycles through the lengths a person would actually pick, then back to the
+/// protocol's own. A stepper beats a dial here: there are four sensible
+/// answers and no reason to let someone set 137 seconds.
+static void on_cycle_length(lv_event_t *e)
+{
+    (void)e;
+    static const cr_ms_t choices[] = { CR_TIME_NONE, CR_SEC(60), CR_SEC(90), CR_SEC(120),
+                                       CR_SEC(180), CR_SEC(240) };
+    size_t at = 0;
+    for (size_t i = 0; i < sizeof choices / sizeof choices[0]; i++) {
+        if (settings.cycle_override_ms == choices[i]) { at = i; break; }
+    }
+    settings.cycle_override_ms = choices[(at + 1) % (sizeof choices / sizeof choices[0])];
+    settings_changed();
+}
+
+static void on_interval_length(lv_event_t *e)
+{
+    (void)e;
+    static const cr_ms_t choices[] = { CR_TIME_NONE, CR_SEC(180), CR_SEC(240), CR_SEC(300) };
+    size_t at = 0;
+    for (size_t i = 0; i < sizeof choices / sizeof choices[0]; i++) {
+        if (settings.interval_override_ms == choices[i]) { at = i; break; }
+    }
+    settings.interval_override_ms = choices[(at + 1) % (sizeof choices / sizeof choices[0])];
+    settings_changed();
+}
+
+/// The TV link is OFF by default and toggled here. A SoftAP plus this AMOLED
+/// is the most expensive thing this board can do to its battery, so it runs
+/// when a display is actually wanted rather than all the time.
+static void on_toggle_tv(lv_event_t *event)
+{
+    (void)event;
+    if (wifi_link_running()) wifi_link_stop();
+    else wifi_link_start(engine, clock_ms);
+    refresh_settings();
+}
+
+/// Nudges the clock. The RTC keeps time by itself, but nothing on this device
+/// can tell it the RIGHT time — there is no network in the trauma bay and no
+/// phone pairing yet — so minutes are adjustable by hand.
+static void on_clock_nudge(lv_event_t *event)
+{
+    const int minutes = (int)(intptr_t)lv_event_get_user_data(event);
+    int64_t now = clock_ms() / 1000;
+    cr_rtc_write(now + minutes * 60);
+    refresh_settings();
+}
+
+static void settings_row(const char *label, const char *value, uint32_t colour,
+                         lv_event_cb_t handler, void *data, const char *probe)
+{
+    lv_obj_t *row = lv_button_create(settings_list);
+    lv_obj_set_size(row, 336, 66);
+    lv_obj_set_style_radius(row, 14, 0);
+    lv_obj_set_style_bg_color(row, lv_color_hex(CR_THEME_SURFACE), 0);
+    lv_obj_set_style_shadow_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    if (handler != NULL) lv_obj_add_event_cb(row, handler, LV_EVENT_CLICKED, data);
+    if (probe != NULL) cr_probe_name(row, probe);
+
+    lv_obj_t *name = lv_label_create(row);
+    lv_label_set_text(name, label);
+    lv_obj_set_style_text_color(name, lv_color_hex(CR_THEME_TEXT), 0);
+    lv_obj_set_style_text_font(name, &cr_font_16, 0);
+    lv_obj_align(name, LV_ALIGN_LEFT_MID, 16, 0);
+
+    lv_obj_t *val = lv_label_create(row);
+    lv_label_set_text(val, value);
+    lv_obj_set_style_text_color(val, lv_color_hex(colour), 0);
+    lv_obj_set_style_text_font(val, &cr_font_28, 0);
+    lv_obj_align(val, LV_ALIGN_RIGHT_MID, -16, 0);
+}
+
+static void seconds_label(char *buf, size_t cap, cr_ms_t override, int fallback)
+{
+    if (override == CR_TIME_NONE) snprintf(buf, cap, "%d s", fallback);
+    else snprintf(buf, cap, "%d s", (int)(override / 1000));
+}
+
+static void refresh_settings(void)
+{
+    lv_obj_clean(settings_list);
+    char value[24];
+
+    settings_row("Alert tones", settings.cues_enabled ? "ON" : "OFF",
+                 settings.cues_enabled ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
+                 on_toggle_cues, NULL, "set.cues");
+    settings_row("Metronome sound", settings.metronome_sound_on ? "ON" : "OFF",
+                 settings.metronome_sound_on ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
+                 on_toggle_sound, NULL, "set.sound");
+    settings_row("Keep screen on", settings.keep_screen_on ? "ON" : "OFF",
+                 settings.keep_screen_on ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
+                 on_toggle_screen, NULL, "set.screen");
+    settings_row("Tap-only menus", settings.menu_tap_only ? "ON" : "OFF",
+                 settings.menu_tap_only ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
+                 on_toggle_tap_only, NULL, "set.taponly");
+
+    // The protocol's own lengths when nothing is overridden, so the row always
+    // says what the device will actually do rather than "default".
+    seconds_label(value, sizeof value, settings.cycle_override_ms, 120);
+    settings_row("CPR cycle", value,
+                 settings.cycle_override_ms == CR_TIME_NONE ? CR_THEME_TEXT_DIM : CR_THEME_CPR,
+                 on_cycle_length, NULL, "set.cycle");
+    seconds_label(value, sizeof value, settings.interval_override_ms, 180);
+    settings_row("Drug interval", value,
+                 settings.interval_override_ms == CR_TIME_NONE ? CR_THEME_TEXT_DIM : CR_THEME_MED,
+                 on_interval_length, NULL, "set.interval");
+
+    // The TV link says what it is actually doing, including whether anything
+    // has joined — an access point nobody can see is indistinguishable from a
+    // broken one, and this is the row that tells them apart.
+    if (wifi_link_running()) {
+        const int n = wifi_link_clients();
+        if (n > 0) snprintf(value, sizeof value, "ON · %d", n);
+        else snprintf(value, sizeof value, "ON · waiting");
+    } else {
+        snprintf(value, sizeof value, "OFF");
+    }
+    settings_row("TV link", value,
+                 wifi_link_running() ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
+                 on_toggle_tv, NULL, "set.tv");
+    if (wifi_link_running()) {
+        settings_row("   join", "codering-tv", CR_THEME_TEXT_DIM, NULL, NULL, NULL);
+        settings_row("   then open", "192.168.4.1", CR_THEME_TEXT_DIM, NULL, NULL, NULL);
+    }
+
+    const cr_civil_t c = cr_civil_from_epoch_s(clock_ms() / 1000);
+    cr_format_stamp(value, sizeof value, &c);
+    settings_row("Clock", value, CR_THEME_TEXT_DIM, NULL, NULL, "set.clock");
+    settings_row("   clock  −1 min", "−1", CR_THEME_TEXT_DIM,
+                 on_clock_nudge, (void *)(intptr_t)-1, "set.clockdown");
+    settings_row("   clock  +1 min", "+1", CR_THEME_TEXT_DIM,
+                 on_clock_nudge, (void *)(intptr_t)1, "set.clockup");
+}
+
+static void on_open_settings(lv_event_t *event)
+{
+    (void)event;
+    refresh_settings();
+    load_screen(settings_screen);
+}
+
+static void build_settings(void)
+{
+    settings_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(settings_screen, lv_color_hex(CR_THEME_BG), 0);
+    lv_obj_remove_flag(settings_screen, LV_OBJ_FLAG_SCROLLABLE);
+    cr_probe_name(settings_screen, "settings");
+
+    label_at(settings_screen, "SETTINGS", CR_THEME_TEXT_DIM, &cr_font_16, 0, 56, 410);
+
+    settings_list = lv_obj_create(settings_screen);
+    lv_obj_set_size(settings_list, 340, 322);
+    lv_obj_set_pos(settings_list, 35, 88);
+    lv_obj_set_style_bg_opa(settings_list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(settings_list, 0, 0);
+    lv_obj_set_style_pad_all(settings_list, 0, 0);
+    lv_obj_set_style_pad_row(settings_list, 8, 0);
+    lv_obj_set_flex_flow(settings_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(settings_list, LV_DIR_VER);
+    cr_probe_name(settings_list, "settings.list");
+
+    lv_obj_t *back = button_at(settings_screen, 105, 414, 200, 56, CR_THEME_TEXT_DIM,
+                               on_home, NULL, "settings.back");
+    lv_obj_t *back_label = lv_label_create(back);
+    lv_label_set_text(back_label, "BACK");
+    lv_obj_set_style_text_color(back_label, lv_color_hex(CR_THEME_TEXT), 0);
+    lv_obj_set_style_text_font(back_label, &cr_font_28, 0);
+    lv_obj_center(back_label);
+}
+
 // MARK: - Recents
 //
 // The last STORE_KEEP codes, newest first, each naming itself by when it
@@ -965,7 +1191,7 @@ static void build_home(void)
     // say so rather than opening an empty screen (M5).
     const struct { const char *symbol; const char *title; int32_t x; lv_event_cb_t handler; } orbit[] = {
         { "clock.arrow.circlepath", "Recent", 42, on_open_recents },
-        { "gearshape.fill", "Settings", 246, NULL },
+        { "gearshape.fill", "Settings", 246, on_open_settings },
     };
     for (size_t i = 0; i < 2; i++) {
         lv_obj_t *button = lv_button_create(home_screen);
@@ -1000,9 +1226,11 @@ void ui_flow_create(cr_engine_t *e, cr_ms_t (*clock)(void))
 {
     engine = e;
     clock_ms = clock;
+    settings = settings_store_load();
     build_home();
     build_summary();
     build_recents();
+    build_settings();
     build_weight();
     build_confirm();
     build_protocols();
