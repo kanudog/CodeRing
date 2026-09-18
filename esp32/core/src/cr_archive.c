@@ -171,6 +171,11 @@ size_t cr_archive_encode(const cr_session_t *s, uint8_t *buf, size_t cap)
 }
 
 /// Everything up to the event array, which is all a listing needs.
+///
+/// It fills the CALLER'S session rather than a local one. That is not style:
+/// cr_session_t is ~96 kB, and a copy of it on the stack overflowed the UI
+/// task the first time Recents was opened on the board — a white screen and a
+/// reboot. Nothing in this file may put a session on the stack.
 static bool decode_head(cursor_t *c, cr_session_t *s)
 {
     uint8_t magic[4];
@@ -200,16 +205,20 @@ static bool decode_head(cursor_t *c, cr_session_t *s)
 bool cr_archive_decode(const uint8_t *buf, size_t len, cr_session_t *out)
 {
     if (buf == NULL || out == NULL) return false;
-    cr_session_t s;
-    memset(&s, 0, sizeof s);
+    // Decoded straight into `out`, never through a local copy — see
+    // decode_head. The cost is that a FAILED decode leaves `out` partially
+    // written, so a caller must check the return value before reading it;
+    // that is cheaper than 96 kB of stack in a UI callback.
+    cr_session_t *s = out;
+    memset(s, 0, sizeof *s);
     cursor_t c = { NULL, buf, len, 0, false };
-    if (!decode_head(&c, &s)) return false;
+    if (!decode_head(&c, s)) return false;
 
     uint16_t events = 0;
     if (!get_u16(&c, &events)) return false;
     if (events > CR_MAX_EVENTS) return false;          // a count this build cannot hold
     for (uint16_t i = 0; i < events; i++) {
-        cr_event_t *e = &s.events[i];
+        cr_event_t *e = &s->events[i];
         uint16_t category = 0;
         uint32_t offset = 0;
         if (!get_u32(&c, &e->seq) || !get_i64(&c, &e->date) || !get_u32(&c, &offset)) return false;
@@ -221,36 +230,46 @@ bool cr_archive_decode(const uint8_t *buf, size_t len, cr_session_t *out)
         if (!get_str(&c, e->definition_id, CR_DEF_ID_MAX)) return false;
         if (!get_u32(&c, &e->color)) return false;
     }
-    s.event_count = events;
+    s->event_count = events;
 
     uint16_t pauses = 0;
     if (!get_u16(&c, &pauses)) return false;
     if (pauses > CR_MAX_PAUSES) return false;
     for (uint16_t i = 0; i < pauses; i++) {
-        if (!get_i64(&c, &s.pauses[i].start) || !get_i64(&c, &s.pauses[i].end)) return false;
+        if (!get_i64(&c, &s->pauses[i].start) || !get_i64(&c, &s->pauses[i].end)) return false;
     }
-    s.pause_count = pauses;
+    s->pause_count = pauses;
 
-    if (c.overflow) return false;
-    *out = s;
-    return true;
+    return !c.overflow;
 }
 
 bool cr_archive_peek(const uint8_t *buf, size_t len, cr_archive_head_t *out)
 {
     if (buf == NULL || out == NULL) return false;
-    cr_session_t s;
-    memset(&s, 0, sizeof s);
+    // Parses the same prefix as decode_head but into a few hundred bytes of
+    // locals instead of a session. A listing calls this once per saved code,
+    // from the UI task; it cannot afford a session each time.
+    uint8_t magic[4];
+    uint16_t version = 0, flags = 0, source = 0, has_age = 0, age = 0, sex = 0, events = 0;
+    char scratch[CR_DEF_ID_MAX];
     cursor_t c = { NULL, buf, len, 0, false };
-    if (!decode_head(&c, &s)) return false;
-    uint16_t events = 0;
-    if (!get_u16(&c, &events)) return false;
 
-    out->start = s.start;
-    out->end = s.end;
-    out->rosc = s.rosc;
+    if (!get(&c, magic, sizeof magic)) return false;
+    if (memcmp(magic, k_magic, sizeof k_magic) != 0) return false;
+    if (!get_u16(&c, &version) || !get_u16(&c, &flags)) return false;
+    if (version != CR_ARCHIVE_VERSION) return false;
+    if (!get_i64(&c, &out->start) || !get_i64(&c, &out->end) || !get_i64(&c, &out->rosc)) {
+        return false;
+    }
+    if (!get_str(&c, scratch, sizeof scratch)) return false;                 // id
+    if (!get_str(&c, scratch, sizeof scratch)) return false;                 // protocol id
+    if (!get_str(&c, out->protocol_name, sizeof out->protocol_name)) return false;
+    if (!get_str(&c, scratch, sizeof scratch)) return false;                 // device name
+    if (!get_f64(&c, &out->weight_kg)) return false;
+    if (!get_u16(&c, &source)) return false;
+    if (!get_str(&c, scratch, sizeof scratch)) return false;                 // broselow zone
+    if (!get_u16(&c, &has_age) || !get_u16(&c, &age) || !get_u16(&c, &sex)) return false;
+    if (!get_u16(&c, &events)) return false;
     out->event_count = events;
-    out->weight_kg = s.patient.weight_kg;
-    cr_copy_utf8(out->protocol_name, sizeof out->protocol_name, s.protocol_name);
-    return true;
+    return !c.overflow;
 }
