@@ -1,0 +1,390 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CodeRing — trauma bay</title>
+<!--
+  index.html — the trauma-bay display.
+
+  ONE SELF-CONTAINED FILE, on purpose. At M5 the watch serves this from its
+  own flash over its own access point, and that access point has no uplink —
+  so a web font, a CDN script or an external stylesheet would simply never
+  load, in the room where it matters. Everything is inline, and the only
+  network call is /api/snapshot.
+
+  It draws NOTHING it did not get from the snapshot (cr_snapshot_json). The
+  panel and this display are two consumers of one derived feed; deciding
+  anything clinical here would put a second source of truth in the room.
+
+  Two rules carried from the watch:
+    • The engine's clocks are the clocks. This counts DOWN locally between
+      polls because the snapshot carries integer ms for exactly that reason,
+      but it never invents state — a frozen cycle stays frozen here too.
+    • Drug interval timers run THROUGH pauses and pulse checks; the CPR cycle
+      does not (invariant 7). The extrapolation below reproduces that, or the
+      TV and the wrist would disagree while paused.
+-->
+<style>
+/* CRTheme (CodeCore/Theme.swift), byte-identical hexes so the wrist, the
+   phone and this screen show one hue per item. */
+:root {
+  --bg:#0A0F1E; --surface:#131A2E; --surface-hi:#1B2440; --track:#1E2742;
+  --text:#F2F5FF; --dim:#8A93B0;
+  --med:#FF3B5C; --shock:#FFB020; --cpr:#A78BFA; --rosc:#4ADE80;
+  --rhythm:#60A5FA; --pause:#FBCB89;
+
+  /* Everything scales off the viewport so one file fits any TV. vmin rather
+     than vw: a 16:9 and a 16:10 panel then get the same proportions. */
+  --u: 1vmin;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+html,body { height:100%; }
+body {
+  background:var(--bg); color:var(--text);
+  font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+  font-variant-numeric:tabular-nums;          /* digits must not jitter */
+  overflow:hidden;
+  /* Many TVs overscan and would eat the edges. A safe inset costs a little
+     screen and saves the corner numbers. */
+  padding:2.2vmin 2.6vmin;
+  display:flex; flex-direction:column; gap:1.6vmin;
+}
+
+/* ---- header ---------------------------------------------------------- */
+header { display:flex; align-items:center; gap:2vmin; flex:0 0 auto; }
+#protocol { font-size:calc(var(--u)*3.4); font-weight:800; letter-spacing:.18em; }
+#patient  { font-size:calc(var(--u)*3.0); color:var(--dim); font-weight:700; }
+#state {
+  margin-left:auto; font-size:calc(var(--u)*3.4); font-weight:900;
+  letter-spacing:.16em; padding:.5vmin 2.2vmin; border-radius:99px;
+  background:var(--cpr); color:var(--bg);
+}
+#stale {                                     /* the feed died — say so */
+  font-size:calc(var(--u)*2.6); font-weight:800; letter-spacing:.12em;
+  padding:.5vmin 1.6vmin; border-radius:99px;
+  background:var(--med); color:var(--bg); display:none;
+}
+
+/* ---- main row -------------------------------------------------------- */
+/* Four columns rather than three-plus-a-strip. The log earns a full-height
+   column: a horizontal strip could only ever show the last few entries, and
+   what the room actually asks is "what has been done, in what order". */
+main { flex:1 1 auto; display:grid; grid-template-columns:25fr 19fr 22fr 34fr;
+       gap:1.8vmin; min-height:0; }
+.card { background:var(--surface); border-radius:2vmin; padding:2vmin 2.4vmin;
+        display:flex; flex-direction:column; min-height:0; }
+.label { font-size:calc(var(--u)*2.5); font-weight:800; letter-spacing:.16em;
+         color:var(--dim); white-space:nowrap; }
+
+/* The ring. One SVG, one dash offset moved per tick — cheap enough for a
+   software-rendered browser on a 424 MB board. */
+.ringwrap { flex:1 1 auto; position:relative; display:grid; place-items:center;
+            min-height:0; }
+svg.ring { width:100%; height:100%; }
+svg.ring circle { fill:none; stroke-linecap:round; }
+/* Constrained to the ring's INNER circle. The stroke is 7 units of a 100
+   viewBox, so anything wider than about 64% of the box runs out over the ring
+   itself — which is unreadable the moment the ring fills red, i.e. exactly
+   when it is an alarm. "-10:33" and "CHECK PULSE & RHYTHM" are the two
+   strings that find this. */
+.ringtext { position:absolute; text-align:center; width:64%; }
+#cycleCount { font-size:calc(var(--u)*12.5); font-weight:900; line-height:.95;
+              letter-spacing:-.02em; }
+#cycleSub   { font-size:calc(var(--u)*2.2); font-weight:800; letter-spacing:.12em;
+              color:var(--dim); margin-top:1vmin; line-height:1.2; }
+
+/* The total code clock — the number most often shouted across a resus bay,
+   so it is the biggest thing on the screen. */
+#totalClock { font-size:calc(var(--u)*17); font-weight:900; line-height:.95;
+              letter-spacing:-.02em; }
+#epiRow { margin-top:3vmin; }
+#epiClock { font-size:calc(var(--u)*9); font-weight:900; line-height:1; }
+#epiSub { font-size:calc(var(--u)*2.4); color:var(--dim); font-weight:700;
+          letter-spacing:.14em; }
+
+/* Meds/timers: what has been given, how many, how long ago. */
+#timers { display:flex; flex-direction:column; gap:1vmin; overflow:hidden; margin-top:1.4vmin; }
+.trow { display:flex; align-items:baseline; gap:1.2vmin; }
+.tdot { width:1.4vmin; height:1.4vmin; border-radius:50%; flex:0 0 auto; }
+.tname { font-size:calc(var(--u)*3.2); font-weight:800; flex:1 1 auto;
+         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tcount { font-size:calc(var(--u)*2.8); color:var(--dim); font-weight:800; }
+.tsince { font-size:calc(var(--u)*3.4); font-weight:900; }
+
+/* ---- the timeline ---------------------------------------------------- */
+/* Newest at the TOP. A timeline normally reads downwards, but this one never
+   scrolls and nobody is going to walk to the TV — so the entry that matters
+   most has to be the one at eye level, not the one that fell off the bottom. */
+#log { display:flex; flex-direction:column; overflow:hidden; margin-top:1.2vmin;
+       flex:1 1 auto; min-height:0; position:relative; }
+/* The spine. It stops short of the last row so the line does not dangle. */
+#log::before { content:""; position:absolute; left:1.05vmin; top:1.2vmin; bottom:1.2vmin;
+               width:.3vmin; background:var(--track); border-radius:1px; }
+/* flex:0 0 auto matters: these are flex children, and flex-shrink defaults to
+   1 — so once the entries overflowed the column, the rows SHRANK instead of
+   being clipped and a wrapped entry drew straight over its neighbour. They
+   must keep their natural height and let the column cut the oldest off. */
+.ev { display:grid; grid-template-columns:2.4vmin auto 1fr; align-items:baseline;
+      column-gap:1.2vmin; padding:.62vmin 0; position:relative;
+      flex:0 0 auto; }
+/* Pinned to the FIRST line, not the middle of the row: a wrapped two-line
+   entry otherwise floats its dot into the gap between the lines. */
+.evdot { width:1.5vmin; height:1.5vmin; border-radius:50%; align-self:start;
+         margin-top:.9vmin; justify-self:center;
+         box-shadow:0 0 0 .45vmin var(--surface); z-index:1; }
+.evstamp { font-size:calc(var(--u)*2.5); color:var(--dim); font-weight:800;
+           font-variant-numeric:tabular-nums; }
+/* Entries WRAP rather than ellipsize. "Fluid bolus — 10 mL/kg: …" hides the
+   one part of the line a handover actually needs, and the column has the
+   vertical room: what does not fit falls off the bottom, oldest first. */
+.evtitle { font-size:calc(var(--u)*2.8); font-weight:800; line-height:1.18; }
+.evdetail { color:var(--dim); font-weight:700; }
+/* The newest entry is called out — during a code the question is almost always
+   "what was the last thing we did". */
+.ev.newest .evtitle { font-size:calc(var(--u)*3.4); }
+.ev.newest .evstamp { font-size:calc(var(--u)*2.9); color:var(--text); }
+.empty { font-size:calc(var(--u)*2.8); color:var(--dim); font-weight:700; }
+.overdue { color:var(--med) !important; }
+</style>
+
+<header>
+  <span id="protocol">—</span>
+  <span id="patient"></span>
+  <span id="stale">FEED LOST</span>
+  <span id="state">STANDBY</span>
+</header>
+
+<main>
+  <section class="card">
+    <span class="label" id="ringLabel">NEXT PULSE CHECK</span>
+    <div class="ringwrap">
+      <svg class="ring" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="42" stroke="var(--track)" stroke-width="7"></circle>
+        <circle id="ringArc" cx="50" cy="50" r="42" stroke="var(--cpr)" stroke-width="7"
+                transform="rotate(-90 50 50)"
+                stroke-dasharray="263.9" stroke-dashoffset="0"></circle>
+      </svg>
+      <div class="ringtext">
+        <div id="cycleCount">—</div>
+        <div id="cycleSub">CYCLE 1</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <span class="label">TOTAL CODE</span>
+    <div id="totalClock">0:00</div>
+    <div id="epiRow">
+      <div class="label" id="epiSubLabel">EPI</div>
+      <div id="epiClock">—</div>
+      <div id="epiSub">no dose given</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <span class="label">TIME SINCE LAST</span>
+    <div id="timers"><span class="empty">nothing given yet</span></div>
+  </section>
+
+  <section class="card">
+    <span class="label" id="logLabel">TIMELINE</span>
+    <div id="log"><span class="empty">no events</span></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+/* The engine's clock and this browser's clock are different clocks. Keep the
+   offset between them and derive every displayed time from it, so the page
+   counts smoothly between polls and a late poll does not make the numbers
+   jump backwards. */
+let snap = null, snapAt = 0, lastOk = 0;
+
+const clock = (ms) => {                       // crClock: floors, clamps at 0
+  const t = Math.max(0, Math.floor(ms / 1000));
+  return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
+};
+const clockSigned = (ms) => {                 // crClockSigned: truncates toward 0
+  const t = Math.trunc(ms / 1000), m = Math.abs(t);
+  return (t < 0 ? "-" : "") + Math.floor(m / 60) + ":" + String(m % 60).padStart(2, "0");
+};
+
+async function poll() {
+  try {
+    const r = await fetch("/api/snapshot", { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    snap = await r.json();
+    snapAt = performance.now();
+    lastOk = Date.now();
+  } catch (e) { /* render() shows FEED LOST; nothing to do here */ }
+}
+
+function render() {
+  if (!snap) return;
+  const s = snap, st = s.state, c = s.clock;
+  /* Milliseconds since the snapshot was taken. Every live number below is
+     the engine's value plus (or minus) this. */
+  const d = performance.now() - snapAt;
+
+  $("stale").style.display = (Date.now() - lastOk > 6000) ? "" : "none";
+
+  $("protocol").textContent = s.session.protocolName || "—";
+  const p = s.patient;
+  $("patient").textContent = p.weightKg.toFixed(1) + " kg" +
+      (p.broselow ? " · " + p.broselow.toUpperCase() : "");
+
+  /* The state pill, in the order the room cares about. */
+  let label = "STANDBY", colour = "var(--cpr)";
+  if (st.ended)           { label = "CODE ENDED";  colour = "var(--dim)"; }
+  else if (st.pulseCheck) { label = "HANDS OFF";   colour = "var(--rhythm)"; }
+  else if (st.rosc)       { label = "ROSC";        colour = "var(--rosc)"; }
+  else if (st.paused)     { label = "PAUSED";      colour = "var(--pause)"; }
+  else if (st.cprStarted) { label = "CPR";         colour = "var(--cpr)"; }
+  $("state").textContent = label;
+  $("state").style.background = colour;
+
+  /* Total code time runs in every state, including after the end (frozen by
+     the engine, which stops advancing elapsedMs once endMs is set). */
+  $("totalClock").textContent = clock(c.elapsedMs + (st.ended ? 0 : d));
+
+  centrePanel(c, st, d);
+  epiPanel(s, st, d);
+  timerPanel(s, d);
+  logPanel(s);
+}
+
+/* The ring shows whichever countdown the current state is about. Post-ROSC
+   that is the vitals cadence, during a check it is the hands-off clock, and
+   during the arrest it is the cycle — same ring, same place, as on the wrist. */
+function centrePanel(c, st, d) {
+  let value, total, text, sub, colour, labelText, overdue = false;
+
+  if (st.pulseCheck) {
+    /* Counts UP, and turns red past the 10 s hands-off target. */
+    const held = c.pulseCheckElapsedMs + d;
+    labelText = "HANDS OFF"; text = clock(held); sub = "CHECK PULSE & RHYTHM";
+    value = Math.min(1, held / 10000); total = 1;
+    colour = held >= 10000 ? "var(--med)" : "var(--rhythm)";
+    overdue = held >= 10000;
+  } else if (st.rosc) {
+    const rem = c.vitalsRemainingMs === null ? null : c.vitalsRemainingMs - d;
+    labelText = "NEXT VITALS";
+    text = rem === null ? clock(c.roscElapsedMs + d) : clockSigned(rem);
+    sub = "ROSC " + clock(c.roscElapsedMs + d);
+    overdue = rem !== null && rem <= 0;
+    value = (rem === null || overdue) ? 1 : Math.max(0, rem) / 300000; total = 1;
+    colour = overdue ? "var(--med)" : "var(--rosc)";
+  } else if (!st.cprStarted) {
+    labelText = "NEXT PULSE CHECK"; text = clock(c.cycleMs);
+    sub = "COMPRESSIONS NOT STARTED"; value = 1; total = 1; colour = "var(--dim)";
+  } else {
+    /* The cycle FREEZES while paused — invariant 7. Extrapolating through a
+       pause would put this screen ahead of the wrist. */
+    const rem = c.cycleRemainingMs - (st.paused ? 0 : d);
+    labelText = "NEXT PULSE CHECK"; text = clockSigned(rem);
+    sub = "CYCLE " + (c.cycleIndex + 1);
+    overdue = rem <= 0;
+    /* Overdue fills the ring rather than emptying it. Draining to zero made
+       the alarm state the one with the LEAST on screen — exactly backwards
+       from twenty feet away. A whole red ring is unmistakable. */
+    value = overdue ? 1 : Math.max(0, rem) / Math.max(1, c.cycleMs); total = 1;
+    colour = overdue ? "var(--med)" : (st.paused ? "var(--pause)" : "var(--cpr)");
+  }
+
+  $("ringLabel").textContent = labelText;
+  $("cycleCount").textContent = text;
+  $("cycleCount").className = overdue ? "overdue" : "";
+  $("cycleSub").textContent = sub;
+  const arc = $("ringArc");
+  arc.setAttribute("stroke", colour);
+  arc.setAttribute("stroke-dashoffset", (263.9 * (1 - value / total)).toFixed(1));
+}
+
+/* The epi interval. It keeps running through pauses and pulse checks, which
+   is deliberate and is why `d` is added unconditionally here. */
+function epiPanel(s, st, d) {
+  const epi = (s.intervals || [])[0];
+  if (!epi) { $("epiClock").textContent = "—"; return; }
+  $("epiSubLabel").textContent = epi.title;
+  if (!epi.running) {
+    $("epiClock").textContent = "—";
+    $("epiClock").className = "";
+    $("epiSub").textContent = "no dose given";
+    return;
+  }
+  const rem = epi.remainingMs - d;
+  $("epiClock").textContent = clockSigned(rem);
+  $("epiClock").className = rem <= 0 ? "overdue" : "";
+  $("epiSub").textContent = rem <= 0 ? "DUE" : "until next dose";
+}
+
+/* "Time since last", with how many have been given. Counts come from the
+   stats tally, which keys on the drug NAME exactly as the watch does. */
+function timerPanel(s, d) {
+  const counts = {};
+  for (const m of (s.stats.meds || [])) counts[m.title] = m.count;
+  const rows = (s.timers || []).filter(t => t.id !== "total");
+  const box = $("timers");
+  if (!rows.length) { box.innerHTML = '<span class="empty">nothing given yet</span>'; return; }
+
+  box.innerHTML = "";
+  /* Only as many as fit: a TV that scrolls is a TV nobody reads. The feed is
+     stalest-first, which is the order that matters when something is overdue. */
+  for (const t of rows.slice(0, 7)) {
+    const row = document.createElement("div"); row.className = "trow";
+    const dot = document.createElement("span"); dot.className = "tdot";
+    dot.style.background = "#" + t.color;
+    const name = document.createElement("span"); name.className = "tname";
+    name.textContent = t.title;
+    const n = document.createElement("span"); n.className = "tcount";
+    n.textContent = counts[t.title] ? "×" + counts[t.title] : "";
+    const since = document.createElement("span"); since.className = "tsince";
+    since.textContent = clock(t.elapsedMs + d);
+    row.append(dot, name, n, since);
+    box.append(row);
+  }
+}
+
+/* The timeline, newest first. Rebuilt only when the log actually changed:
+   rev and count together tell an append from an undo, which is exactly why
+   the snapshot carries both — and rebuilding this list every tick would be
+   the single most expensive thing on the page. */
+let lastRev = -1, lastCount = -1;
+function logPanel(s) {
+  if (s.log.rev === lastRev && s.log.count === lastCount) return;
+  lastRev = s.log.rev; lastCount = s.log.count;
+  const box = $("log");
+  const events = (s.log.events || []).slice().reverse();
+  $("logLabel").textContent = "TIMELINE · " + s.log.count;
+  if (!events.length) { box.innerHTML = '<span class="empty">no events</span>'; return; }
+  box.innerHTML = "";
+
+  /* No row-fitting arithmetic: the column is overflow:hidden and the newest
+     entry is at the TOP, so whatever does not fit falls off the bottom, which
+     is the end that matters least. Guessing a row height in vmin units was
+     only ever going to be wrong on some screen. */
+  for (const [i, ev] of events.slice(0, 18).entries()) {
+    const el = document.createElement("div");
+    el.className = i === 0 ? "ev newest" : "ev";
+    const dot = document.createElement("span"); dot.className = "evdot";
+    dot.style.background = "#" + ev.color;
+    const stamp = document.createElement("span"); stamp.className = "evstamp";
+    stamp.textContent = ev.stamp;
+    const title = document.createElement("span"); title.className = "evtitle";
+    title.textContent = ev.title;
+    title.style.color = "#" + ev.color;
+    if (ev.detail) {
+      const det = document.createElement("span"); det.className = "evdetail";
+      det.textContent = " — " + ev.detail;
+      title.append(det);
+    }
+    el.append(dot, stamp, title);
+    box.append(el);
+  }
+}
+
+poll();
+setInterval(poll, 1000);     // the feed
+setInterval(render, 500);    // the clocks, smoothed locally between polls
+</script>

@@ -15,6 +15,7 @@
 #include "cr_defaults.h"
 #include "cr_engine.h"
 #include "cr_json.h"
+#include "cr_menu.h"
 #include "cr_snapshot.h"
 
 static cr_engine_t engine;
@@ -71,6 +72,21 @@ int crp_command(const char *name, const char *arg1, const char *arg2, double val
         const cr_event_def_t *def = cr_builtin_event(arg1);
         const char *sub = arg2[0] ? arg2 : NULL;
         return cr_engine_log_event_def(&engine, def, sub, now_ms) ? 1 : 0;
+    }
+    // Anything reachable from the watch's menu tree, by fan key + item id.
+    // Not everything on the wrist is a built-in event definition — the comms
+    // services (Surgery, Anesthesia, ECMO, Consult) and the temperature
+    // devices are ad-hoc leaves the menu itself carries, so "event" cannot
+    // reach them. This drives the real cr_menu_select path, which is the
+    // same one a finger on the panel takes.
+    if (is(name, "menu")) {
+        cr_menu_item_t items[CR_MAX_SLOTS];
+        size_t n = cr_menu_items(&engine, arg1, items, CR_MAX_SLOTS);
+        for (size_t i = 0; i < n; i++) {
+            if (strcmp(items[i].id, arg2) != 0) continue;
+            return cr_menu_select(&engine, &items[i], now_ms) ? 1 : 0;
+        }
+        return 0;
     }
     return 0;
 }

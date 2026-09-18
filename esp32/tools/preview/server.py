@@ -91,6 +91,13 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in ("/", "/index.html"):
             with open(os.path.join(HERE, "index.html"), "rb") as handle:
                 return self._send(handle.read(), "text/html; charset=utf-8")
+        # The trauma-bay display, served from esp32/tv so it can be developed
+        # against this engine long before the watch can serve it itself. That
+        # file is the one the ESP32 will hold in flash at M5 — it is not a
+        # copy, and nothing about it may depend on this server.
+        if url.path in ("/tv", "/tv/"):
+            with open(os.path.join(HERE, "..", "..", "tv", "index.html"), "rb") as handle:
+                return self._send(handle.read(), "text/html; charset=utf-8")
         if url.path == "/api/snapshot":
             first = int(query.get("from", ["0"])[0])
             return self._send(snapshot(first))
