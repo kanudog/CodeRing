@@ -19,6 +19,7 @@
 #include "cr_defaults.h"
 #include "cr_engine.h"
 #include "cr_rtc.h"
+#include "session_store.h"
 #include "ui_flow.h"
 #include "ui_probe.h"
 #include "ui_screen.h"
@@ -157,6 +158,13 @@ void app_main(void)
     cr_probe_watch_touches(bsp_display_get_input_dev());
     cr_probe_dump(ui_live_screen(), "live session layout");
     bsp_display_unlock();
+
+    // Storage mounts AFTER the screens exist, and deliberately so: the first
+    // mount of a blank partition formats it, and LVGL runs on the BSP's own
+    // task — so the home screen is already drawn and responsive while this
+    // happens rather than the device looking dead. Not fatal either way: a
+    // code still runs, it just cannot be kept.
+    store_init();
 
     ESP_LOGI(TAG, "screens built — internal %d kB free, PSRAM %d kB free",
              (int)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),

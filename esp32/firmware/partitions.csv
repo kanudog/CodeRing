@@ -1,7 +1,13 @@
 # CodeRing partition table for the 32 MB flash on this board.
-# One app slot for now; OTA and the session store arrive with M5.
+# One app slot for now; OTA has yet to arrive.
+#
+# `storage` holds saved codes, and 1 MB is already absurd for them: a code
+# encodes to a couple of kB, and only the last twelve are kept — about 24 kB in
+# use. It was 8 MB, which was worse than wasteful: SPIFFS formats a blank
+# partition on first mount, and formatting 8 MB takes MINUTES with the screen
+# already up and frozen. Sized for the data instead of for the flash.
 # Name,     Type, SubType,  Offset,   Size
 nvs,        data, nvs,      ,         64K
 phy_init,   data, phy,      ,         4K
 factory,    app,  factory,  ,         6M
-storage,    data, spiffs,   ,         8M
+storage,    data, spiffs,   ,         1M

@@ -16,12 +16,14 @@
 #include "cr_defaults.h"
 #include "cr_engine.h"
 #include "cr_layout.h"
+#include "cr_clock.h"
 #include "cr_patient.h"
 #include "cr_session.h"
 #include "cr_text.h"
 #include "cr_theme.h"
 #include "fonts/cr_fonts.h"
 #include "icons/cr_icons.h"
+#include "session_store.h"
 #include "ui_flow.h"
 #include "ui_probe.h"
 #include "ui_screen.h"
@@ -39,7 +41,21 @@ static lv_obj_t *age_screen;
 static lv_obj_t *age_readout;
 static lv_obj_t *age_estimate_label;
 static lv_obj_t *summary_screen;
-static lv_obj_t *summary_banner, *summary_banner_label, *summary_list;
+static lv_obj_t *summary_banner, *summary_banner_label, *summary_list, *summary_when;
+static lv_obj_t *summary_done_label;
+static lv_obj_t *recents_screen, *recents_list, *recents_empty;
+
+/// Which session the summary is showing. The live one when a code has just
+/// ended, or a copy loaded from flash when browsing Recents — the watch does
+/// exactly this, reusing SummaryView for both.
+static const cr_session_t *summary_session;
+/// Where DONE goes back to: home after a code, the list when browsing.
+static bool summary_from_recents;
+/// A loaded code lives here rather than on a stack: it is ~96 kB.
+EXT_RAM_BSS_ATTR static cr_session_t loaded_session;
+
+static void show_recents(void);
+static void on_summary_done(lv_event_t *event);
 static lv_obj_t *chip_protocol_value;
 static lv_obj_t *chip_weight_value;
 static lv_obj_t *chip_age_value;
@@ -630,9 +646,19 @@ static void summary_line(const char *text, uint32_t color, const lv_font_t *font
 
 static void refresh_summary(void)
 {
-    const cr_session_t *s = &engine->session;
+    const cr_session_t *s = summary_session != NULL ? summary_session : &engine->session;
+    // A finished code is measured at its own end, not at now — otherwise a
+    // code reopened a week later would report a week-long duration.
+    const cr_ms_t as_of = (s->end != CR_TIME_NONE) ? s->end : clock_ms();
     cr_stats_t stats;
-    cr_session_stats(s, clock_ms(), &stats);
+    cr_session_stats(s, as_of, &stats);
+
+    // When it happened, which is the whole point of the Recents list.
+    char when[40];
+    const cr_civil_t c = cr_civil_from_epoch_s(s->start / 1000);
+    cr_format_stamp(when, sizeof when, &c);
+    lv_label_set_text(summary_when, when);
+    lv_label_set_text(summary_done_label, summary_from_recents ? "BACK" : "DONE");
 
     const bool rosc = s->rosc != CR_TIME_NONE;
     lv_label_set_text(summary_banner_label, rosc ? "ROSC ACHIEVED" : "CODE ENDED");
@@ -717,11 +743,13 @@ static void build_summary(void)
     lv_label_set_text(summary_banner_label, "CODE ENDED");
     lv_obj_center(summary_banner_label);
 
+    summary_when = label_at(summary_screen, "", CR_THEME_TEXT_DIM, &cr_font_16, 0, 114, 410);
+
     // Narrower than the glass because the corners are curved, and scrolling:
     // a long code's log does not fit and must not be truncated.
     summary_list = lv_obj_create(summary_screen);
-    lv_obj_set_size(summary_list, 340, 284);
-    lv_obj_set_pos(summary_list, 35, 122);
+    lv_obj_set_size(summary_list, 340, 262);
+    lv_obj_set_pos(summary_list, 35, 144);
     lv_obj_set_style_bg_opa(summary_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(summary_list, 0, 0);
     lv_obj_set_style_pad_all(summary_list, 0, 0);
@@ -733,16 +761,31 @@ static void build_summary(void)
     // Lifted clear of the bottom band, which this panel does not show in full
     // (the same reason the live screen's BOTTOM_LIFT exists).
     lv_obj_t *done = button_at(summary_screen, 105, 414, 200, 56, CR_THEME_CPR,
-                               on_home, NULL, "summary.done");
-    lv_obj_t *done_label = lv_label_create(done);
-    lv_label_set_text(done_label, "DONE");
-    lv_obj_set_style_text_color(done_label, lv_color_hex(CR_THEME_CPR), 0);
-    lv_obj_set_style_text_font(done_label, &cr_font_28, 0);
-    lv_obj_center(done_label);
+                               on_summary_done, NULL, "summary.done");
+    summary_done_label = lv_label_create(done);
+    lv_label_set_text(summary_done_label, "DONE");
+    lv_obj_set_style_text_color(summary_done_label, lv_color_hex(CR_THEME_CPR), 0);
+    lv_obj_set_style_text_font(summary_done_label, &cr_font_28, 0);
+    lv_obj_center(summary_done_label);
+}
+
+static void on_summary_done(lv_event_t *event)
+{
+    (void)event;
+    if (summary_from_recents) { show_recents(); return; }
+    load_screen(home_screen);
 }
 
 void ui_flow_show_summary(void)
 {
+    // Persist FIRST, then draw. If the save is going to fail, the moment to
+    // find out is while the screen still says what just happened — not when
+    // the list turns out to be empty tomorrow.
+    if (!store_save(&engine->session)) {
+        ESP_LOGW(TAG, "this code was NOT saved");
+    }
+    summary_session = &engine->session;
+    summary_from_recents = false;
     refresh_summary();
     load_screen(summary_screen);
     // The live screen's controls were proven at boot; these were not, and the
@@ -753,6 +796,132 @@ void ui_flow_show_summary(void)
         dumped = true;
         cr_probe_dump(summary_screen, "summary layout");
     }
+}
+
+// MARK: - Recents
+//
+// The last STORE_KEEP codes, newest first, each naming itself by when it
+// happened — which is the entire reason the RTC came first. Tapping one opens
+// the same summary screen a code ends on, exactly as the watch reuses
+// SummaryView for browsing.
+
+static store_entry_t recents[STORE_KEEP];
+static size_t recents_count;
+
+static void on_recent_row(lv_event_t *event)
+{
+    const size_t index = (size_t)(uintptr_t)lv_event_get_user_data(event);
+    if (index >= recents_count) return;
+    if (!store_load(recents[index].name, &loaded_session)) {
+        ESP_LOGE(TAG, "could not open %s", recents[index].name);
+        return;
+    }
+    summary_session = &loaded_session;
+    summary_from_recents = true;
+    refresh_summary();
+    load_screen(summary_screen);
+}
+
+static void refresh_recents(void)
+{
+    lv_obj_clean(recents_list);
+    recents_count = store_list(recents, STORE_KEEP);
+
+    if (recents_count == 0) {
+        lv_obj_remove_flag(recents_empty, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(recents_empty, store_ready()
+            ? "No codes saved yet.\nThey are kept here when a code ends."
+            : "Storage did not mount —\ncodes cannot be saved.");
+        return;
+    }
+    lv_obj_add_flag(recents_empty, LV_OBJ_FLAG_HIDDEN);
+
+    for (size_t i = 0; i < recents_count; i++) {
+        const cr_archive_head_t *h = &recents[i].head;
+
+        lv_obj_t *row = lv_button_create(recents_list);
+        lv_obj_set_size(row, 336, 76);
+        lv_obj_set_style_radius(row, 16, 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(CR_THEME_SURFACE), 0);
+        lv_obj_set_style_shadow_width(row, 0, 0);
+        lv_obj_set_style_pad_all(row, 0, 0);
+        lv_obj_add_event_cb(row, on_recent_row, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
+
+        // ROSC or not is the first thing anyone wants from this list, so it is
+        // the colour of the whole row's marker rather than a word to read.
+        const bool rosc = h->rosc != CR_TIME_NONE;
+        lv_obj_t *bar = lv_obj_create(row);
+        lv_obj_set_size(bar, 6, 52);
+        lv_obj_set_pos(bar, 10, 12);
+        lv_obj_set_style_bg_color(bar, lv_color_hex(rosc ? CR_THEME_ROSC : CR_THEME_TEXT_DIM), 0);
+        lv_obj_set_style_border_width(bar, 0, 0);
+        lv_obj_set_style_radius(bar, 3, 0);
+        lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
+
+        char when[40];
+        const cr_civil_t c = cr_civil_from_epoch_s(h->start / 1000);
+        cr_format_stamp(when, sizeof when, &c);
+        lv_obj_t *stamp = lv_label_create(row);
+        lv_label_set_text(stamp, when);
+        lv_obj_set_style_text_color(stamp, lv_color_hex(CR_THEME_TEXT), 0);
+        lv_obj_set_style_text_font(stamp, &cr_font_28, 0);
+        lv_obj_set_pos(stamp, 26, 8);
+
+        char detail[64], length[16];
+        const cr_ms_t ran = (h->end != CR_TIME_NONE) ? h->end - h->start : 0;
+        cr_format_clock(length, sizeof length, ran);
+        snprintf(detail, sizeof detail, "%s · %.1f kg · %d events",
+                 length, h->weight_kg, (int)h->event_count);
+        lv_obj_t *sub = lv_label_create(row);
+        lv_label_set_text(sub, detail);
+        lv_obj_set_style_text_color(sub, lv_color_hex(CR_THEME_TEXT_DIM), 0);
+        lv_obj_set_style_text_font(sub, &cr_font_16, 0);
+        lv_obj_set_pos(sub, 26, 44);
+    }
+}
+
+static void show_recents(void)
+{
+    refresh_recents();
+    load_screen(recents_screen);
+}
+
+static void on_open_recents(lv_event_t *event)
+{
+    (void)event;
+    show_recents();
+}
+
+static void build_recents(void)
+{
+    recents_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(recents_screen, lv_color_hex(CR_THEME_BG), 0);
+    lv_obj_remove_flag(recents_screen, LV_OBJ_FLAG_SCROLLABLE);
+    cr_probe_name(recents_screen, "recents");
+
+    label_at(recents_screen, "RECENT CODES", CR_THEME_TEXT_DIM, &cr_font_16, 0, 56, 410);
+
+    recents_list = lv_obj_create(recents_screen);
+    lv_obj_set_size(recents_list, 340, 322);
+    lv_obj_set_pos(recents_list, 35, 88);
+    lv_obj_set_style_bg_opa(recents_list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(recents_list, 0, 0);
+    lv_obj_set_style_pad_all(recents_list, 0, 0);
+    lv_obj_set_style_pad_row(recents_list, 8, 0);
+    lv_obj_set_flex_flow(recents_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(recents_list, LV_DIR_VER);
+    cr_probe_name(recents_list, "recents.list");
+
+    recents_empty = label_at(recents_screen, "", CR_THEME_TEXT_DIM, &cr_font_16, 0, 200, 410);
+    lv_obj_add_flag(recents_empty, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *back = button_at(recents_screen, 105, 414, 200, 56, CR_THEME_TEXT_DIM,
+                               on_home, NULL, "recents.back");
+    lv_obj_t *back_label = lv_label_create(back);
+    lv_label_set_text(back_label, "BACK");
+    lv_obj_set_style_text_color(back_label, lv_color_hex(CR_THEME_TEXT), 0);
+    lv_obj_set_style_text_font(back_label, &cr_font_28, 0);
+    lv_obj_center(back_label);
 }
 
 // MARK: - Home
@@ -794,12 +963,15 @@ static void build_home(void)
 
     // Recent and Settings: both need storage to be worth opening, so they
     // say so rather than opening an empty screen (M5).
-    const struct { const char *symbol; const char *title; int32_t x; } orbit[] = {
-        { "clock.arrow.circlepath", "Recent", 42 },
-        { "gearshape.fill", "Settings", 246 },
+    const struct { const char *symbol; const char *title; int32_t x; lv_event_cb_t handler; } orbit[] = {
+        { "clock.arrow.circlepath", "Recent", 42, on_open_recents },
+        { "gearshape.fill", "Settings", 246, NULL },
     };
     for (size_t i = 0; i < 2; i++) {
         lv_obj_t *button = lv_button_create(home_screen);
+        if (orbit[i].handler != NULL) {
+            lv_obj_add_event_cb(button, orbit[i].handler, LV_EVENT_CLICKED, NULL);
+        }
         lv_obj_set_size(button, 122, 92);
         lv_obj_set_pos(button, orbit[i].x, 352);
         lv_obj_set_style_radius(button, 24, 0);
@@ -830,6 +1002,7 @@ void ui_flow_create(cr_engine_t *e, cr_ms_t (*clock)(void))
     clock_ms = clock;
     build_home();
     build_summary();
+    build_recents();
     build_weight();
     build_confirm();
     build_protocols();

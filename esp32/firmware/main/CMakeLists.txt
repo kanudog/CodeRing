@@ -18,12 +18,12 @@ math(EXPR BUILD_LOCAL_EPOCH "${BUILD_EPOCH} + ${TZ_SECONDS}")
 file(GLOB ICON_SRCS ${CMAKE_CURRENT_LIST_DIR}/icons/*.c)
 
 idf_component_register(
-    SRCS "main.c" "ui_probe.c" "ui_screen.c" "ui_flow.c" "cr_rtc.c"
+    SRCS "main.c" "ui_probe.c" "ui_screen.c" "ui_flow.c" "cr_rtc.c" "session_store.c"
          "fonts/cr_font_16.c" "fonts/cr_font_28.c" "fonts/cr_font_48.c"
          ${ICON_SRCS}
     INCLUDE_DIRS "." "fonts" "icons"
     REQUIRES codering_core
-    PRIV_REQUIRES esp_timer esp_driver_gpio
+    PRIV_REQUIRES esp_timer esp_driver_gpio spiffs nvs_flash
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE CR_BUILD_LOCAL_EPOCH=${BUILD_LOCAL_EPOCH})
