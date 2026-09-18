@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CodeRing — waiting</title>
+<!--
+  waiting.html — what the trauma-bay TV shows when the watch is not serving.
+//
+  The Pi lives on the TV and the watch is picked up when needed, so "no watch"
+  is this display's NORMAL state, not an error. Before this, the browser simply
+  did not launch until the watch appeared — which left the TV showing kernel
+  boot messages and a login prompt, in a resuscitation bay.
+
+  It watches for the watch and navigates there itself, so nobody has to touch
+  the Pi: switch the TV link on at the wrist and the display follows.
+-->
+<style>
+  :root { --bg:#0A0F1E; --dim:#8A93B0; --cpr:#A78BFA; }
+  * { box-sizing:border-box; margin:0; }
+  html, body { height:100%; }
+  body {
+    background:var(--bg); color:var(--dim);
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:3vmin; cursor:none;
+  }
+  h1 { font-size:6vmin; font-weight:900; letter-spacing:.35em; color:var(--cpr); }
+  p  { font-size:3vmin; font-weight:700; letter-spacing:.1em; text-align:center;
+       line-height:1.7; }
+  /* A slow pulse, so it is visibly alive rather than a frozen screen — the one
+     thing that would send someone to poke at the Pi. */
+  .dot { width:2vmin; height:2vmin; border-radius:50%; background:var(--cpr);
+         animation:breathe 2.4s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { opacity:.25 } 50% { opacity:1 } }
+</style>
+
+<h1>CODERING</h1>
+<div class="dot"></div>
+<p>Waiting for the watch.<br>Turn on <b>TV link</b> in Settings.</p>
+
+<script>
+"use strict";
+const WATCH = "http://192.168.4.1/";
+/* no-cors because this page is served from file:// and only needs to know the
+   watch ANSWERS, not what it said. An opaque response is a reachable watch. */
+async function look() {
+  try {
+    await fetch(WATCH, { mode: "no-cors", cache: "no-store" });
+    location.href = WATCH;
+  } catch (e) { /* not there yet; the next tick will look again */ }
+}
+look();
+setInterval(look, 3000);
+</script>

@@ -28,6 +28,14 @@ while [ ! -e /dev/dri/card0 ] && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 1; done
 # default to save the watch's battery. Waiting quietly is the same outcome
 # without the churn, and it means the display comes up on its own the moment
 # the watch starts serving, with nobody touching the Pi.
+# The browser starts NOW, on a holding screen, and never waits.
+#
+# It used to wait for the watch before launching, which meant the TV showed
+# kernel boot messages and a login prompt until someone switched the TV link
+# on — in a resuscitation bay. waiting.html says what is happening and
+# navigates to the watch by itself when it appears.
+HOLDING="file://$(cd "$(dirname "$0")" && pwd)/waiting.html"
+
 # Ask to join, rather than waiting to be found.
 #
 # NetworkManager backs its scan interval off to about two minutes once it has
@@ -38,12 +46,18 @@ while [ ! -e /dev/dri/card0 ] && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 1; done
 # of the polkit rule in this directory; without that this still works, just
 # slowly, so the failure is graceful.
 NETWORK="${CODERING_NETWORK:-codering-tv}"
-until curl -sf -o /dev/null --max-time 3 "$URL"; do
-    if ! nmcli -t -f NAME connection show --active 2>/dev/null | grep -qx "$NETWORK"; then
-        nmcli device wifi rescan >/dev/null 2>&1
-        nmcli connection up "$NETWORK" >/dev/null 2>&1
-    fi
-    sleep 3
-done
+(
+    while :; do
+        if ! nmcli -t -f NAME connection show --active 2>/dev/null | grep -qx "$NETWORK"; then
+            nmcli device wifi rescan >/dev/null 2>&1
+            nmcli connection up "$NETWORK" >/dev/null 2>&1
+        fi
+        sleep 5
+    done
+) &
+nudge=$!
+trap 'kill "$nudge" 2>/dev/null' EXIT INT TERM
 
-exec cog --platform=drm "$URL"
+# Not exec: the nudge above has to be cleaned up when this exits, and systemd
+# restarting the unit should not leave an orphan looping on the radio.
+cog --platform=drm "$HOLDING"
