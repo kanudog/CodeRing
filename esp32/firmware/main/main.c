@@ -15,6 +15,7 @@
 
 #include "driver/i2c_master.h"
 
+#include "cr_audio.h"
 #include "cr_clock.h"
 #include "cr_defaults.h"
 #include "cr_engine.h"
@@ -127,6 +128,18 @@ void app_main(void)
     // happens rather than the device looking dead. Not fatal either way: a
     // code still runs, it just cannot be kept.
     store_init();
+
+    // Audio last, and measured: I2S allocates DMA buffers from the same
+    // internal RAM the display needs to flush, and running out of it does not
+    // crash — it silently stops drawing. The numbers either side say what it
+    // actually cost.
+    ESP_LOGI(TAG, "before audio — internal %d kB, DMA-capable %d kB",
+             (int)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+             (int)(heap_caps_get_free_size(MALLOC_CAP_DMA) / 1024));
+    cr_audio_init();
+    ESP_LOGI(TAG, "after audio  — internal %d kB, DMA-capable %d kB",
+             (int)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+             (int)(heap_caps_get_free_size(MALLOC_CAP_DMA) / 1024));
 
     ESP_LOGI(TAG, "screens built — internal %d kB free, PSRAM %d kB free",
              (int)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),

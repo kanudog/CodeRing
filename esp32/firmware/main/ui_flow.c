@@ -26,6 +26,7 @@
 #include "cr_theme.h"
 #include "fonts/cr_fonts.h"
 #include "icons/cr_icons.h"
+#include "cr_audio.h"
 #include "session_store.h"
 #include "settings_store.h"
 #include "wifi_link.h"
@@ -920,6 +921,14 @@ static void on_toggle_tv(lv_event_t *event)
     refresh_settings();
 }
 
+/// Proves the speaker works, with one tap and no code running. C5, the middle
+/// of the three metronome pitches.
+static void on_test_tone(lv_event_t *event)
+{
+    (void)event;
+    cr_audio_tone(cr_metronome_pitch_hz(CR_PITCH_MEDIUM), 120);
+}
+
 /// Nudges the clock. The RTC keeps time by itself, but nothing on this device
 /// can tell it the RIGHT time — there is no network in the trauma bay and no
 /// phone pairing yet — so minutes are adjustable by hand.
@@ -1011,6 +1020,10 @@ static void refresh_settings(void)
     settings_row("Drug interval", value,
                  settings.interval_override_ms == CR_TIME_NONE ? CR_THEME_TEXT_DIM : CR_THEME_MED,
                  on_interval_length, NULL, "set.interval");
+
+    settings_row("Test tone", cr_audio_ready() ? "TAP" : "NO CODEC",
+                 cr_audio_ready() ? CR_THEME_CPR : CR_THEME_MED,
+                 cr_audio_ready() ? on_test_tone : NULL, NULL, "set.testtone");
 
     const cr_civil_t c = cr_civil_from_epoch_s(clock_ms() / 1000);
     cr_format_stamp(value, sizeof value, &c);
