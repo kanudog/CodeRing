@@ -28,7 +28,21 @@ while [ ! -e /dev/dri/card0 ] && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 1; done
 # default to save the watch's battery. Waiting quietly is the same outcome
 # without the churn, and it means the display comes up on its own the moment
 # the watch starts serving, with nobody touching the Pi.
+# Ask to join, rather than waiting to be found.
+#
+# NetworkManager backs its scan interval off to about two minutes once it has
+# been failing to find any network — which is exactly this Pi's life, sitting
+# in a bay all day with the watch's access point off. Waiting passively meant
+# the display could take that long to appear after the TV link was switched on.
+# Nudging it needs NetworkManager permissions the kiosk user only has because
+# of the polkit rule in this directory; without that this still works, just
+# slowly, so the failure is graceful.
+NETWORK="${CODERING_NETWORK:-codering-tv}"
 until curl -sf -o /dev/null --max-time 3 "$URL"; do
+    if ! nmcli -t -f NAME connection show --active 2>/dev/null | grep -qx "$NETWORK"; then
+        nmcli device wifi rescan >/dev/null 2>&1
+        nmcli connection up "$NETWORK" >/dev/null 2>&1
+    fi
     sleep 3
 done
 

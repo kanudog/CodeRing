@@ -50,6 +50,7 @@ static void test_settings_round_trip_every_field(void)
     settings.pulse_check_due = CR_CUE_SINGLE;
     settings.med_due = CR_CUE_LONG;
     settings.hands_off_overshoot = CR_CUE_DOUBLE;
+    settings.tv_link_on = true;
 
     char json[512];
     CHECK(cr_settings_to_json(&settings, json, sizeof json) < sizeof json);

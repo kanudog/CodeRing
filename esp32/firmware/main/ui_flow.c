@@ -920,6 +920,12 @@ static void on_toggle_tv(lv_event_t *event)
     (void)event;
     if (wifi_link_running()) wifi_link_stop();
     else wifi_link_start(engine, clock_ms);
+    // Remembered, so a permanently-installed display keeps working across a
+    // reboot or a flat battery. Stored as what actually happened rather than
+    // as what was asked for: if the radio refused to start, the setting should
+    // not claim it is on.
+    settings.tv_link_on = wifi_link_running();
+    settings_store_save(&settings);
     refresh_settings();
 }
 
@@ -1344,6 +1350,9 @@ void ui_flow_create(cr_engine_t *e, cr_ms_t (*clock)(void))
     clock_ms = clock;
     settings = settings_store_load();
     ui_settings_changed(&settings);
+    // Bring the radio back up if it was left on. After the UI exists, so a
+    // slow start cannot delay the screen appearing.
+    if (settings.tv_link_on) wifi_link_start(e, clock);
     build_home();
     build_summary();
     build_recents();

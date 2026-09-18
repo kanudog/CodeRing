@@ -1,0 +1,20 @@
+// 50-codering-network.rules — lets the kiosk join the watch's network by itself.
+//
+// Goes in /etc/polkit-1/rules.d/ on the display Pi.
+//
+// Without this, NetworkManager refuses an unprivileged rescan ("not
+// authorized") and the Pi can only join when NM's own scan cycle happens to
+// look — which backs off to about two minutes once it has been failing to find
+// anything, which is this Pi's normal state. The display then took minutes to
+// appear after the TV link was switched on.
+//
+// This is a single-purpose appliance whose whole job is to join one network and
+// draw one page, so full NetworkManager control for the group that already owns
+// the radio is a reasonable trade. It is not a reasonable trade on a
+// general-purpose machine.
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
+        subject.isInGroup("netdev")) {
+        return polkit.Result.YES;
+    }
+});

@@ -40,6 +40,12 @@ typedef struct {
     int32_t metronome_bpm;
     cr_metronome_pitch_t metronome_pitch;
     bool keep_screen_on;
+    /// The trauma-bay display's access point. Remembered, because the Pi is
+    /// installed permanently and a watch that quietly came back with its radio
+    /// off would leave a dark TV and nothing on the wrist saying why. It is
+    /// still off by default — the radio never comes up without a deliberate
+    /// tap at least once.
+    bool tv_link_on;
     bool menu_tap_only;             // tap to open and tap to select; no hold-and-slide
     cr_ms_t cycle_override_ms;      // CR_TIME_NONE = the protocol default (120 s)
     cr_ms_t interval_override_ms;   // CR_TIME_NONE = the protocol default (180 s)

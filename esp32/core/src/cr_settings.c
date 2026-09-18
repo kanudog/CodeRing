@@ -62,6 +62,7 @@ cr_settings_t cr_settings_default(void)
     s.metronome_sound_on = false;   // opt-in, exactly as on the watch
     s.metronome_bpm = 110;
     s.metronome_pitch = CR_PITCH_MEDIUM;
+    s.tv_link_on = false;
     s.keep_screen_on = false;
     s.menu_tap_only = false;
     s.cycle_override_ms = CR_TIME_NONE;
@@ -81,6 +82,7 @@ bool cr_settings_equal(const cr_settings_t *a, const cr_settings_t *b)
            a->metronome_bpm == b->metronome_bpm &&
            a->metronome_pitch == b->metronome_pitch &&
            a->keep_screen_on == b->keep_screen_on &&
+           a->tv_link_on == b->tv_link_on &&
            a->menu_tap_only == b->menu_tap_only &&
            a->cycle_override_ms == b->cycle_override_ms &&
            a->interval_override_ms == b->interval_override_ms &&
@@ -116,6 +118,7 @@ size_t cr_settings_to_json(const cr_settings_t *s, char *buf, size_t cap)
     cr_jw_raw(&w, ",\"hapticMedDue\":");        cr_jw_str(&w, cue_key(s->med_due));
     cr_jw_raw(&w, ",\"hapticPulseCheckDue\":"); cr_jw_str(&w, cue_key(s->pulse_check_due));
     cr_jw_raw(&w, ",\"hapticsEnabled\":");      cr_jw_bool(&w, s->cues_enabled);
+    cr_jw_raw(&w, ",\"tvLinkOn\":");           cr_jw_bool(&w, s->tv_link_on);
     cr_jw_raw(&w, ",\"keepScreenOn\":");        cr_jw_bool(&w, s->keep_screen_on);
     cr_jw_raw(&w, ",\"menuTapOnly\":");         cr_jw_bool(&w, s->menu_tap_only);
     cr_jw_raw(&w, ",\"metronomeBPM\":");        cr_jw_i64(&w, s->metronome_bpm);
@@ -188,6 +191,9 @@ bool cr_settings_from_json(const char *json, cr_settings_t *out)
             } else if (strcmp(key, "metronomeSoundOn") == 0) {
                 if (kind != CR_JSON_BOOL) goto fail;
                 s.metronome_sound_on = boolean;
+            } else if (strcmp(key, "tvLinkOn") == 0) {
+                if (kind != CR_JSON_BOOL) goto fail;
+                s.tv_link_on = boolean;
             } else if (strcmp(key, "keepScreenOn") == 0) {
                 if (kind != CR_JSON_BOOL) goto fail;
                 s.keep_screen_on = boolean;
