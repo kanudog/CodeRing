@@ -79,6 +79,38 @@ it. Two things that cost an hour each:
   on. Worth keeping permanently: it is also what stops a Pi that boots before
   the TV is switched on coming up with no picture.
 
+### Leave the boot messages visible
+
+Tempting to add `quiet` and drop `console=tty1` so the TV shows nothing but the
+app. Don't. We did, and the next unclean shutdown produced a Pi that sat at a
+solid green LED with a completely black screen — indistinguishable from dead
+hardware, because a filesystem check, a kernel panic and a failed root mount
+all look the same when nothing is allowed to print.
+
+It was none of those: the card was healthy, the boot partition passed a clean
+check, and it simply needed a few minutes to fsck after the power was pulled.
+Half an hour went into diagnosing that, and a re-image was nearly done for no
+reason.
+
+This device has no keyboard, no console and — when it is broken — no network.
+Boot output is the only thing that can tell you what is happening, and a few
+seconds of scrolling text before the holding screen appears is a cheap price.
+Disable `getty@tty1` instead, so nobody ever sees a login prompt.
+
+### Pull the power safely
+
+The root filesystem is read-write, so an unclean shutdown means an fsck on the
+next boot and, eventually, real corruption. Shut it down properly:
+
+```bash
+ssh <pi> 'sudo shutdown -h now'
+```
+
+That needs the Pi reachable, which it is NOT while it is on the watch's access
+point — turn the TV link off at the wrist first and let it fall back. That
+dependency is the weak point of this design; making the root filesystem
+read-only would remove it, and is the right fix for something wall-mounted.
+
 As a systemd unit (substitute your own user for `<user>`):
 
 ```ini
