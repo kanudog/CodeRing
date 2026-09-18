@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -34,9 +35,11 @@ static bool running;
 static int clients;
 
 /// A snapshot is a few kB with a full log. Static rather than on the stack:
-/// httpd's task does not have room for this, and a stack overflow inside a
-/// web server is a reboot in the middle of a code.
-static char snapshot_buf[24 * 1024];
+/// httpd's task does not have room for this, and a stack overflow inside a web
+/// server is a reboot in the middle of a code. In PSRAM rather than internal
+/// RAM because nothing here is DMA'd — it is built by snprintf and handed to
+/// the TCP stack — and internal RAM is what the display needs to draw.
+EXT_RAM_BSS_ATTR static char snapshot_buf[24 * 1024];
 
 static esp_err_t page_handler(httpd_req_t *req)
 {

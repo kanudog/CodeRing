@@ -35,6 +35,25 @@ CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 CONFIG_LV_USE_CLIB_MALLOC=y
 CONFIG_LV_USE_BUILTIN_MALLOC=n
 
+# …and then the C allocator put every one of those objects in INTERNAL RAM,
+# because ALWAYSINTERNAL defaults to 16 kB and an LVGL object is far smaller
+# than that. With M5's screens added, internal RAM ran low enough that the SPI
+# driver could no longer allocate a DMA buffer to push pixels:
+#
+#   E spi_master: setup_dma_priv_buffer: Failed to allocate priv TX buffer
+#   E lcd_panel.io.spi: spi transmit (queue) color failed
+#
+# Half the flushes failed, so bands of the previous screen stayed on the glass
+# and the device looked like two screens fighting over it. Nothing had crashed
+# — it simply could not draw.
+#
+# Small allocations now prefer PSRAM, and a bigger slice of internal RAM is
+# reserved for the DMA-capable allocations only internal RAM can satisfy.
+# LVGL objects are touched at UI rates, not per pixel, so PSRAM's latency does
+# not show.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
+
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_USE_PERF_MONITOR=n
 # Big timer numerals have to be readable at arm's length.

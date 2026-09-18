@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "lvgl.h"
 
@@ -150,11 +151,27 @@ static const char *TAG = "flow";
 /// device latched on the button that was pressed — it no longer belongs to
 /// the visible screen, so every later touch is routed nowhere and the new
 /// screen looks dead. Release the touch first, then swap.
+/// What is left to draw with. The display's SPI transfers need DMA-capable
+/// INTERNAL memory, and when that runs out the panel does not crash — it
+/// simply stops flushing, leaving bands of the previous screen on the glass.
+/// That failure is invisible from the outside, so every screen change says
+/// where memory stands.
+static void log_heap(const char *where)
+{
+    ESP_LOGI(TAG, "%s — internal %d kB, DMA-capable %d kB, PSRAM %d kB",
+             where,
+             (int)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+             (int)(heap_caps_get_free_size(MALLOC_CAP_DMA) / 1024),
+             (int)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+}
+
 static void load_screen(lv_obj_t *screen)
 {
     lv_indev_t *indev = lv_indev_active();
     if (indev != NULL) lv_indev_wait_release(indev);
     lv_screen_load(screen);
+    const char *name = lv_obj_get_user_data(screen);
+    log_heap(name != NULL ? name : "screen");
 }
 
 static void on_screen_press(lv_event_t *event)
