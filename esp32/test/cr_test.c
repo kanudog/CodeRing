@@ -70,6 +70,7 @@ int main(int argc, char **argv)
         { "settings", cr_settings_tests, cr_settings_test_count },
         { "snapshot", cr_snapshot_tests, cr_snapshot_test_count },
         { "layout",   cr_layout_tests,   cr_layout_test_count },
+        { "clock",    cr_clock_tests,    cr_clock_test_count },
         { "menu",     cr_menu_tests,     cr_menu_test_count },
         { "port",     cr_port_tests,     cr_port_test_count },
     };

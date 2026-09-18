@@ -15,8 +15,10 @@
 
 #include "driver/i2c_master.h"
 
+#include "cr_clock.h"
 #include "cr_defaults.h"
 #include "cr_engine.h"
+#include "cr_rtc.h"
 #include "ui_flow.h"
 #include "ui_probe.h"
 #include "ui_screen.h"
@@ -26,12 +28,50 @@ static const char *TAG = "codering";
 // 96 kB of session in PSRAM, leaving internal RAM for LVGL and (at M5) WiFi.
 EXT_RAM_BSS_ATTR static cr_engine_t engine;
 
-/// The engine reads no clock of its own (invariant 4); this is the only
-/// place time comes from. M5 swaps this for an RTC-anchored epoch, so a
-/// reboot mid-code can resume against the same anchors.
+#ifndef CR_BUILD_LOCAL_EPOCH
+#define CR_BUILD_LOCAL_EPOCH 0
+#endif
+
+/// Local epoch ms at the instant esp_timer read zero. Set once, at boot, from
+/// the RTC — and then never touched, which is the whole point: the engine's
+/// clock must never jump backwards (cr_time.h), so the RTC ANCHORS it rather
+/// than driving it. esp_timer does the counting; a second RTC read that came
+/// back a tick earlier would rewind every anchor in a running code.
+static int64_t epoch_at_boot_ms;
+
+/// The engine reads no clock of its own (invariant 4); this is the only place
+/// time comes from. Now RTC-anchored epoch ms, so timestamps survive a reboot
+/// and a saved code can say when it happened.
 static cr_ms_t now_ms(void)
 {
-    return (cr_ms_t)(esp_timer_get_time() / 1000);
+    return (cr_ms_t)(epoch_at_boot_ms + esp_timer_get_time() / 1000);
+}
+
+/// Reads the clock, and seeds it from the build stamp the first time — a
+/// board fresh off the bench has never had its RTC set, and one that has
+/// simply keeps time across reboots and reflashes.
+static void start_clock(void)
+{
+    if (cr_rtc_init() != ESP_OK) {
+        ESP_LOGW(TAG, "no RTC — falling back to the build stamp");
+        epoch_at_boot_ms = (int64_t)CR_BUILD_LOCAL_EPOCH * 1000;
+        return;
+    }
+
+    int64_t seconds = 0;
+    if (!cr_rtc_read(&seconds)) {
+        ESP_LOGW(TAG, "RTC unset — seeding it from the build stamp, once");
+        cr_rtc_write((int64_t)CR_BUILD_LOCAL_EPOCH);
+        if (!cr_rtc_read(&seconds)) seconds = (int64_t)CR_BUILD_LOCAL_EPOCH;
+    }
+    // Subtract what esp_timer has already counted during boot, so the two
+    // clocks agree about this instant rather than about app_main's start.
+    epoch_at_boot_ms = seconds * 1000 - esp_timer_get_time() / 1000;
+
+    const cr_civil_t c = cr_civil_from_epoch_s(seconds);
+    ESP_LOGI(TAG, "clock: %04d-%02d-%02d %02d:%02d:%02d (local)",
+             (int)c.year, (int)c.month, (int)c.day,
+             (int)c.hour, (int)c.minute, (int)c.second);
 }
 
 static void tick_cb(lv_timer_t *timer)
@@ -78,17 +118,6 @@ void app_main(void)
              (int)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
              (int)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
 
-    // The engine is built when START CODE is tapped, not here: the code
-    // clock starts at GO, and a session that began at boot would already be
-    // minutes old by the time anyone touched it.
-    cr_patient_t patient;
-    memset(&patient, 0, sizeof patient);
-    patient.weight_kg = 10;
-    patient.source = CR_WEIGHT_MANUAL;
-    cr_engine_init(&engine, &cr_protocol_pals_arrest, &cr_pals_drug_set,
-                   cr_builtin_events, cr_builtin_event_count,
-                   &patient, now_ms(), "DEVICE-0001", "codering-esp32");
-
     lv_display_t *display = bsp_display_start();
     if (display == NULL) {
         ESP_LOGE(TAG, "display failed to start");
@@ -99,6 +128,23 @@ void app_main(void)
     // After the display comes up: the BSP powers the rails and starts the
     // bus as part of that, so scanning earlier found nothing at all.
     scan_i2c();
+
+    // The bus is up, so the clock can be. Everything timestamped after this
+    // point — every event, every saved code — is dated from the RTC, so the
+    // clock has to be anchored BEFORE the engine is built.
+    start_clock();
+
+    // A placeholder engine so the live screen has something to draw before a
+    // code exists. The real one is built when START CODE is tapped: the code
+    // clock starts at GO, and a session begun at boot would already be
+    // minutes old by the time anyone touched it.
+    cr_patient_t patient;
+    memset(&patient, 0, sizeof patient);
+    patient.weight_kg = 10;
+    patient.source = CR_WEIGHT_MANUAL;
+    cr_engine_init(&engine, &cr_protocol_pals_arrest, &cr_pals_drug_set,
+                   cr_builtin_events, cr_builtin_event_count,
+                   &patient, now_ms(), "DEVICE-0001", "codering-esp32");
 
     // The BSP drives LVGL from its own task, so everything that touches it
     // runs under the same lock.

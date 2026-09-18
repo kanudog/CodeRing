@@ -18,7 +18,7 @@ math(EXPR BUILD_LOCAL_EPOCH "${BUILD_EPOCH} + ${TZ_SECONDS}")
 file(GLOB ICON_SRCS ${CMAKE_CURRENT_LIST_DIR}/icons/*.c)
 
 idf_component_register(
-    SRCS "main.c" "ui_probe.c" "ui_screen.c" "ui_flow.c"
+    SRCS "main.c" "ui_probe.c" "ui_screen.c" "ui_flow.c" "cr_rtc.c"
          "fonts/cr_font_16.c" "fonts/cr_font_28.c" "fonts/cr_font_48.c"
          ${ICON_SRCS}
     INCLUDE_DIRS "." "fonts" "icons"
