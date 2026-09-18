@@ -1043,11 +1043,39 @@ static void refresh_settings(void)
     lv_obj_scroll_to_y(settings_list, scroll, LV_ANIM_OFF);
 }
 
+/// Keeps the TV link row honest while the screen is open.
+///
+/// The list is rebuilt only when something is tapped, so a display that joined
+/// a few seconds after the link was switched on left the row reading
+/// "ON · waiting" indefinitely — the one row whose entire job is to say whether
+/// anything connected. It now re-reads while you are looking at it, and only
+/// while you are looking at it.
+static lv_timer_t *settings_poll;
+
+static void on_settings_poll(lv_timer_t *timer)
+{
+    (void)timer;
+    if (lv_screen_active() != settings_screen) return;
+    static int last_clients = -1;
+    static bool last_running;
+    const int clients = wifi_link_clients();
+    const bool running = wifi_link_running();
+    // Only when it actually changed: rebuilding the list every two seconds
+    // would fight the scroll and churn LVGL objects for nothing.
+    if (clients == last_clients && running == last_running) return;
+    last_clients = clients;
+    last_running = running;
+    refresh_settings();
+}
+
 static void on_open_settings(lv_event_t *event)
 {
     (void)event;
     refresh_settings();
     load_screen(settings_screen);
+    if (settings_poll == NULL) {
+        settings_poll = lv_timer_create(on_settings_poll, 2000, NULL);
+    }
 }
 
 static void build_settings(void)
