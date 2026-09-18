@@ -70,7 +70,7 @@ cr_settings_t cr_settings_default(void)
     // Defaults keep the three due-cues distinct from one another.
     s.pulse_check_due = CR_CUE_TRIPLE;
     s.med_due = CR_CUE_DOUBLE;
-    s.cycle_complete = CR_CUE_LONG;
+    s.hands_off_overshoot = CR_CUE_LONG;
     return s;
 }
 
@@ -87,7 +87,7 @@ bool cr_settings_equal(const cr_settings_t *a, const cr_settings_t *b)
            strcmp(a->default_drug_set_id, b->default_drug_set_id) == 0 &&
            a->pulse_check_due == b->pulse_check_due &&
            a->med_due == b->med_due &&
-           a->cycle_complete == b->cycle_complete;
+           a->hands_off_overshoot == b->hands_off_overshoot;
 }
 
 size_t cr_settings_to_json(const cr_settings_t *s, char *buf, size_t cap)
@@ -112,7 +112,7 @@ size_t cr_settings_to_json(const cr_settings_t *s, char *buf, size_t cap)
         cr_jw_num(&w, (double)s->interval_override_ms / 1000.0);
         cr_jw_raw(&w, ",");
     }
-    cr_jw_raw(&w, "\"hapticCycleComplete\":");  cr_jw_str(&w, cue_key(s->cycle_complete));
+    cr_jw_raw(&w, "\"hapticCycleComplete\":");  cr_jw_str(&w, cue_key(s->hands_off_overshoot));
     cr_jw_raw(&w, ",\"hapticMedDue\":");        cr_jw_str(&w, cue_key(s->med_due));
     cr_jw_raw(&w, ",\"hapticPulseCheckDue\":"); cr_jw_str(&w, cue_key(s->pulse_check_due));
     cr_jw_raw(&w, ",\"hapticsEnabled\":");      cr_jw_bool(&w, s->cues_enabled);
@@ -215,7 +215,7 @@ bool cr_settings_from_json(const char *json, cr_settings_t *out)
             } else if (strcmp(key, "hapticMedDue") == 0) {
                 if (kind != CR_JSON_STRING || !cue_from_key(text, &s.med_due)) goto fail;
             } else if (strcmp(key, "hapticCycleComplete") == 0) {
-                if (kind != CR_JSON_STRING || !cue_from_key(text, &s.cycle_complete)) goto fail;
+                if (kind != CR_JSON_STRING || !cue_from_key(text, &s.hands_off_overshoot)) goto fail;
             }
             // Unknown keys are ignored, so a newer phone build can add fields
             // without breaking this device.

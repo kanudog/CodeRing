@@ -205,16 +205,34 @@ Read off the unit itself with esptool, not from the datasheet:
     serves on a laptop is byte-for-byte the file the watch serves in the bay —
     plus `cr_snapshot_json` at `/api/snapshot`. Off by default: a SoftAP plus
     this AMOLED is the most expensive thing this board can do to its battery.
-- **NEXT — M4, audio.** Nothing of it is built. The metronome (already
-  audio-only on the watch), the four cue rhythms `cr_settings` already models,
-  and alerts that persist or escalate until acknowledged — a haptic fires once,
-  a tone can be missed. The I2C scan confirms an ES8311 codec at 0x18 and an
-  ES7210 mic ADC at 0x40 — and **no haptic driver at 0x5A**, so the tick felt
-  on a tap is the speaker or the panel, not a motor. Three controls are wired
-  to nothing until it lands: the speaker button on the live screen and the two
-  Settings rows marked "(M4)".
-- **Later** — CSV to the TF card (`BSP_CAPS_SDCARD` says the slot is there),
-  and pairing with the phone.
+- **M4 — audio, done.** There is no motor (nothing answered at 0x5A), so every
+  cue the watch delivers to a wrist arrives here through the ES8311 instead.
+  - `firmware/main/cr_audio.*` owns the sound and knows nothing clinical: a
+    task fed by a four-deep queue, because writing to the codec blocks for as
+    long as the sound lasts and the caller is nearly always the LVGL task. The
+    queue never blocks — a backlog of ticks is worse than a dropped one, since
+    the beat they belonged to has passed.
+  - `core/cr_cues.*` decides WHEN, and is tested there. A cue that fires twice
+    is an annoyance and one that never fires is a missed drug; neither leaves a
+    mark on the screen or in the log, so neither would be found by using the
+    device. Each cue is keyed to the **anchor** it belongs to rather than to a
+    fired/not-fired flag — the first version re-armed by observing a timer with
+    time left on it, which made firing depend on when polling happened to land.
+    At 10 Hz that always worked, so the flaw would have stayed invisible. Keying
+    to the anchor also makes undo work for free.
+  - **One alert per event, then silence** (Sebastian, 2026-09-18). The screen
+    is already red and counting negative; a speaker that nags during a
+    resuscitation becomes a sound people learn to ignore.
+  - Three cues: the cycle running out, a drug interval running out, and a
+    pulse check passing the 10 s hands-off target. That last one is the only
+    alert the watch app itself raises automatically.
+  - The metronome is anchored to `now` rather than advanced by a period, so a
+    late tick does not catch up in a burst. It runs only while compressions do.
+  - The speaker button silences the metronome for the rest of a code without
+    touching the saved setting: a room that needs quiet for thirty seconds is
+    not a change of preference.
+- **NEXT** — CSV to the TF card (`BSP_CAPS_SDCARD` says the slot is there),
+  pairing with the phone, and a battery figure for the TV link.
   Recent and Settings on the home screen are drawn but inert until then.
 
 ## Things that only showed up on the hardware

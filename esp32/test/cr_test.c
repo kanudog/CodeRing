@@ -72,6 +72,7 @@ int main(int argc, char **argv)
         { "layout",   cr_layout_tests,   cr_layout_test_count },
         { "clock",    cr_clock_tests,    cr_clock_test_count },
         { "archive",  cr_archive_tests,  cr_archive_test_count },
+        { "cues",     cr_cue_tests,      cr_cue_test_count },
         { "menu",     cr_menu_tests,     cr_menu_test_count },
         { "port",     cr_port_tests,     cr_port_test_count },
     };

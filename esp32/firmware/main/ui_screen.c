@@ -7,7 +7,9 @@
 #include "esp_log.h"
 #include "lvgl.h"
 
+#include "cr_audio.h"
 #include "cr_clock.h"
+#include "cr_cues.h"
 #include "cr_defaults.h"
 #include "cr_layout.h"
 #include "cr_menu.h"
@@ -82,6 +84,17 @@ static size_t centred_count;
 static cr_engine_t *engine;
 static cr_ms_t (*clock_ms)(void);
 
+/// What has already been announced. Reset whenever a new code starts, so the
+/// first cycle of the next code is not silenced by the last one's.
+static cr_cue_state_t cues;
+/// The user's choices. ui_flow owns the settings and hands them over on every
+/// change, so this screen never reads storage.
+static cr_settings_t audio_settings;
+/// The last beat, so the metronome runs off the same clock as everything else
+/// rather than off a timer of its own. Invariant 4 in spirit: no clock here
+/// either — the tick is derived from `now`.
+static cr_ms_t last_beat = CR_TIME_NONE;
+
 static struct {
     lv_obj_t *root;
     lv_obj_t *cpr_ring, *drug_ring;
@@ -89,6 +102,7 @@ static struct {
     lv_obj_t *code_clock, *total_label, *patient, *toast;
     lv_obj_t *start_text, *paused_text;
     lv_obj_t *pause_button;
+    lv_obj_t *mute_button;
     lv_obj_t *wall_clock;
     lv_obj_t *pulse_button;
     lv_obj_t *check_title, *check_clock, *check_hint, *check_resume, *check_found;
@@ -758,6 +772,22 @@ static void on_check_found(lv_event_t *event)
     report(cr_engine_complete_pulse_check(engine, true, clock_ms()), "pulse found");
 }
 
+/// The speaker. It silences the metronome for the rest of this code without
+/// touching the saved setting: a room that needs quiet for thirty seconds is
+/// not a change of preference.
+static void on_mute(lv_event_t *event)
+{
+    (void)event;
+    audio_settings.metronome_sound_on = !audio_settings.metronome_sound_on;
+    lv_obj_clean(live.mute_button);
+    make_icon(live.mute_button,
+              audio_settings.metronome_sound_on ? "speaker.wave.2.fill" : "speaker.slash.fill",
+              audio_settings.metronome_sound_on ? CR_THEME_CPR : CR_THEME_TEXT_DIM,
+              cr_screen.mute_button.glyph);
+    toast(audio_settings.metronome_sound_on ? "metronome on" : "metronome off",
+          audio_settings.metronome_sound_on ? CR_THEME_CPR : CR_THEME_TEXT_DIM);
+}
+
 static void on_pause(lv_event_t *event)
 {
     (void)event;
@@ -936,8 +966,8 @@ void ui_create(cr_engine_t *e, cr_ms_t (*clock)(void))
               CR_THEME_TEXT, on_log, NULL, "btn.log");
     make_disc(screen, &cr_screen.timers_button, "timer", CR_THEME_SURFACE,
               CR_THEME_TEXT, on_timers, NULL, "btn.timers");
-    make_disc(screen, &cr_screen.mute_button, "speaker.slash.fill", CR_THEME_SURFACE,
-              CR_THEME_TEXT_DIM, NULL, NULL, "btn.mute");
+    live.mute_button = make_disc(screen, &cr_screen.mute_button, "speaker.wave.2.fill",
+                                 CR_THEME_SURFACE, CR_THEME_CPR, on_mute, NULL, "btn.mute");
     // Red, as on the watch: the one control here that ends things.
     make_disc(screen, &cr_screen.flag_button, "flag.fill", CR_THEME_SURFACE,
               CR_THEME_MED, on_flag, NULL, "btn.flag");
@@ -1252,10 +1282,68 @@ static void rosc_tick(cr_ms_t now)
     else lv_obj_remove_flag(live.rosc_heart, LV_OBJ_FLAG_HIDDEN);
 }
 
+void ui_settings_changed(const cr_settings_t *s)
+{
+    if (s != NULL) audio_settings = *s;
+}
+
+void ui_code_started(void)
+{
+    cr_cues_reset(&cues);
+    last_beat = CR_TIME_NONE;
+}
+
+/// The beat, and the three alerts. Driven from the same 10 Hz tick as the
+/// screen, off the same `now` — so a paused code makes no sound and a frozen
+/// clock produces no beat, without either of those being a special case here.
+static void audio_tick(cr_ms_t now)
+{
+    // Compressions only: not before Start CPR, not while paused, not during a
+    // hands-off check, not after ROSC, not after the end.
+    const bool compressing = engine->cpr_started && !engine->paused &&
+                             !engine->in_pulse_check && !engine->rosc_achieved &&
+                             !engine->ended;
+    if (compressing && audio_settings.metronome_sound_on) {
+        const int bpm = audio_settings.metronome_bpm > 0 ? audio_settings.metronome_bpm : 110;
+        const cr_ms_t period = 60000 / bpm;
+        if (last_beat == CR_TIME_NONE || now - last_beat >= period) {
+            // Anchored to now rather than advanced by a period, so a late tick
+            // does not try to catch up with a burst of beats.
+            last_beat = now;
+            cr_audio_tone(cr_metronome_pitch_hz(audio_settings.metronome_pitch), 34);
+        }
+    } else {
+        last_beat = CR_TIME_NONE;
+    }
+
+    if (!audio_settings.cues_enabled) {
+        // Still POLLED, so the state keeps up: turning cues back on mid-code
+        // should not replay everything that was missed.
+        cr_cues_poll(&cues, engine, now, NULL, 0);
+        return;
+    }
+    cr_cue_t fired[4];
+    const size_t n = cr_cues_poll(&cues, engine, now, fired, 4);
+    for (size_t i = 0; i < n; i++) {
+        switch (fired[i]) {
+        case CR_CUE_PULSE_CHECK_DUE:
+            cr_audio_cue(audio_settings.pulse_check_due, cr_metronome_pitch_hz(CR_PITCH_HIGH));
+            break;
+        case CR_CUE_MED_DUE:
+            cr_audio_cue(audio_settings.med_due, cr_metronome_pitch_hz(CR_PITCH_MEDIUM));
+            break;
+        case CR_CUE_HANDS_OFF_OVERSHOOT:
+            cr_audio_cue(audio_settings.hands_off_overshoot, cr_metronome_pitch_hz(CR_PITCH_LOW));
+            break;
+        }
+    }
+}
+
 void ui_tick(void)
 {
     const cr_ms_t now = clock_ms();
     char buf[64];
+    audio_tick(now);
 
     // Wall clock. Stamped at build time and advanced by the monotonic clock;
     // M5 replaces this with the board's PCF85063 RTC, which survives a

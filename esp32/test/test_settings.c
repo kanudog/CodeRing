@@ -49,7 +49,7 @@ static void test_settings_round_trip_every_field(void)
     strcpy(settings.default_drug_set_id, "C0DE0000-0000-4000-8000-000000000001");
     settings.pulse_check_due = CR_CUE_SINGLE;
     settings.med_due = CR_CUE_LONG;
-    settings.cycle_complete = CR_CUE_DOUBLE;
+    settings.hands_off_overshoot = CR_CUE_DOUBLE;
 
     char json[512];
     CHECK(cr_settings_to_json(&settings, json, sizeof json) < sizeof json);

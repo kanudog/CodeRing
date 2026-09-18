@@ -277,6 +277,7 @@ static void on_start_code(lv_event_t *event)
     cr_engine_init(engine, &configured, &cr_pals_drug_set,
                    cr_builtin_events, cr_builtin_event_count,
                    &patient, clock_ms(), "DEVICE-0001", "codering-esp32");
+    ui_code_started();
     ui_tick();
     load_screen(ui_live_screen());
 }
@@ -862,6 +863,7 @@ static void refresh_settings(void);
 static void settings_changed(void)
 {
     settings_store_save(&settings);
+    ui_settings_changed(&settings);
     if (engine != NULL) {
         const cr_protocol_t updated = cr_protocol_applying(
             &cr_protocol_pals_arrest, settings.cycle_override_ms, settings.interval_override_ms);
@@ -996,14 +998,10 @@ static void refresh_settings(void)
         settings_row("   then open", "192.168.4.1", CR_THEME_TEXT_DIM, NULL, NULL, NULL);
     }
 
-    // These two store a preference that nothing plays yet: there is no audio
-    // path until M4. The LABEL carries that; the value reads like every other
-    // row, because a switch that spells its state differently from its
-    // neighbours is a worse problem than one that is waiting on a milestone.
-    settings_row("Alert tones (M4)", settings.cues_enabled ? "ON" : "OFF",
+    settings_row("Alert tones", settings.cues_enabled ? "ON" : "OFF",
                  settings.cues_enabled ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
                  on_toggle_cues, NULL, "set.cues");
-    settings_row("Metronome (M4)", settings.metronome_sound_on ? "ON" : "OFF",
+    settings_row("Metronome", settings.metronome_sound_on ? "ON" : "OFF",
                  settings.metronome_sound_on ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
                  on_toggle_sound, NULL, "set.sound");
     settings_row("Keep screen on", settings.keep_screen_on ? "ON" : "OFF",
@@ -1345,6 +1343,7 @@ void ui_flow_create(cr_engine_t *e, cr_ms_t (*clock)(void))
     engine = e;
     clock_ms = clock;
     settings = settings_store_load();
+    ui_settings_changed(&settings);
     build_home();
     build_summary();
     build_recents();

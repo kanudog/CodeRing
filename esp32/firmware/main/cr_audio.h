@@ -14,6 +14,7 @@
 
 #include <stdbool.h>
 
+#include "cr_settings.h"
 #include "esp_err.h"
 
 /// Brings up I2S and the codec. Safe to call once, after the display and the
@@ -27,6 +28,11 @@ bool cr_audio_ready(void);
 /// a dropped queue entry is silently ignored, because a missed tick is better
 /// than a stalled UI.
 void cr_audio_tone(double hz, int ms);
+
+/// Plays one of the four cue rhythms at `hz`. The rhythms exist so three
+/// different alerts can be told apart without looking — which is the whole
+/// job, on a device worn by someone whose eyes are on a patient.
+void cr_audio_cue(cr_cue_pattern_t pattern, double hz);
 
 /// Master mute, honoured by everything above. The BSP has no audio deinit, so
 /// this stops the board EMITTING rather than releasing the peripheral.

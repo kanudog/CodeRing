@@ -18,7 +18,15 @@ static const char *TAG = "audio";
 /// they belonged to has already passed.
 #define QUEUE_DEPTH   4
 
-typedef struct { double hz; int ms; } tone_t;
+/// A queued sound: either a bare tone, or a rhythm the task expands. Expanding
+/// it there rather than at the call site is what keeps the gaps accurate —
+/// the caller is usually the UI task and must not sit in a delay loop.
+typedef struct {
+    double hz;
+    int ms;
+    int repeats;        // 1 for a plain tone
+    int gap_ms;
+} tone_t;
 
 static esp_codec_dev_handle_t speaker;
 static QueueHandle_t queue;
@@ -64,9 +72,15 @@ static void audio_task(void *arg)
         if (muted || speaker == NULL) continue;
 
         const size_t n = render(tone.hz, tone.ms, samples, MAX_SAMPLES);
-        // Blocks for the length of the sound — which is exactly why this is
-        // not the UI task.
-        esp_codec_dev_write(speaker, samples, (int)(n * sizeof samples[0]));
+        for (int r = 0; r < tone.repeats; r++) {
+            if (muted) break;
+            // Blocks for the length of the sound — which is exactly why this
+            // is not the UI task.
+            esp_codec_dev_write(speaker, samples, (int)(n * sizeof samples[0]));
+            if (r + 1 < tone.repeats && tone.gap_ms > 0) {
+                vTaskDelay(pdMS_TO_TICKS(tone.gap_ms));
+            }
+        }
     }
 }
 
@@ -108,10 +122,26 @@ esp_err_t cr_audio_init(void)
 
 bool cr_audio_ready(void) { return speaker != NULL && queue != NULL; }
 
+void cr_audio_cue(cr_cue_pattern_t pattern, double hz)
+{
+    if (!cr_audio_ready() || muted) return;
+    // Short and quick for the counted rhythms so three ticks still read as one
+    // alert rather than three; LONG is a single held note, which is the most
+    // different thing a single voice can say.
+    tone_t tone = { hz, 90, 1, 0 };
+    switch (pattern) {
+    case CR_CUE_SINGLE: break;
+    case CR_CUE_DOUBLE: tone.ms = 70; tone.repeats = 2; tone.gap_ms = 90;  break;
+    case CR_CUE_TRIPLE: tone.ms = 60; tone.repeats = 3; tone.gap_ms = 80;  break;
+    case CR_CUE_LONG:   tone.ms = 320; break;
+    }
+    xQueueSend(queue, &tone, 0);
+}
+
 void cr_audio_tone(double hz, int ms)
 {
     if (!cr_audio_ready() || muted) return;
-    const tone_t tone = { hz, ms };
+    const tone_t tone = { hz, ms, 1, 0 };
     // Never blocks: a full queue means ticks are arriving faster than they can
     // be played, and the right answer is to drop this one.
     xQueueSend(queue, &tone, 0);

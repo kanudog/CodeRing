@@ -46,7 +46,11 @@ typedef struct {
     char default_drug_set_id[CR_ID_MAX];   // "" = none
     cr_cue_pattern_t pulse_check_due;
     cr_cue_pattern_t med_due;
-    cr_cue_pattern_t cycle_complete;
+    /// Named for what it MEANS, not for the JSON key, which stays
+    /// "hapticCycleComplete" so settings written by an older build still
+    /// load. It fires when a pulse check passes the 10 s hands-off target
+    /// — the one automatic alert the watch itself has.
+    cr_cue_pattern_t hands_off_overshoot;
 } cr_settings_t;
 
 cr_settings_t cr_settings_default(void);
