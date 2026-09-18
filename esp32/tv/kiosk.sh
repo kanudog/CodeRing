@@ -20,4 +20,16 @@ URL="${CODERING_URL:-http://localhost:8765/tv}"
 i=0
 while [ ! -e /dev/dri/card0 ] && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 1; done
 
+# Wait for the server before launching the browser.
+#
+# cog exits when it cannot load its page, and systemd's Restart=always then
+# brings it back every few seconds — a restart loop for as long as the watch's
+# access point is off, which is most of the time, since the TV link is off by
+# default to save the watch's battery. Waiting quietly is the same outcome
+# without the churn, and it means the display comes up on its own the moment
+# the watch starts serving, with nobody touching the Pi.
+until curl -sf -o /dev/null --max-time 3 "$URL"; do
+    sleep 3
+done
+
 exec cog --platform=drm "$URL"
