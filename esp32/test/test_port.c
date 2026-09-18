@@ -210,6 +210,57 @@ static void test_stats_tally_every_med_by_name(void)
     CHECK(!stats.has_rosc);
 }
 
+// Port.cprFractionReadsAsAPercent — the debrief's one derived number.
+static void test_cpr_fraction_reads_as_a_percent(void)
+{
+    char buf[16];
+    cr_format_percent(buf, sizeof buf, 1.0);    CHECK_STR(buf, "100%");
+    cr_format_percent(buf, sizeof buf, 0.0);    CHECK_STR(buf, "0%");
+    cr_format_percent(buf, sizeof buf, 0.834);  CHECK_STR(buf, "83%");
+    cr_format_percent(buf, sizeof buf, 0.836);  CHECK_STR(buf, "84%");
+
+    // A real code, end to end: 60 s of a 300 s arrest spent hands-off.
+    test_make_engine(&engine, START);
+    cr_engine_t *e = &engine;
+    cr_engine_start_cpr(e, START);
+    cr_engine_toggle_pause(e, T(100));
+    cr_engine_toggle_pause(e, T(160));
+    cr_engine_end(e, T(300));
+
+    cr_stats_t stats;
+    cr_session_stats(&e->session, T(300), &stats);
+    CHECK_NEAR(stats.cpr_fraction, 0.8, 0.0001);
+    cr_format_percent(buf, sizeof buf, stats.cpr_fraction);
+    CHECK_STR(buf, "80%");
+}
+
+// Port.handoffFindsTheLastEpiByName — the handoff card's "last epi" line.
+static void test_handoff_finds_the_last_epi_by_name(void)
+{
+    test_make_engine(&engine, START);
+    cr_engine_t *e = &engine;
+    cr_engine_start_cpr(e, START);
+    CHECK(cr_session_last_med_named(&e->session, "epi") == NULL);   // none yet
+
+    cr_engine_log_drug(e, &cr_drug_epinephrine, -1, T(60));
+    cr_engine_log_drug(e, &cr_drug_amiodarone, -1, T(120));
+    cr_engine_log_drug(e, &cr_drug_epinephrine, -1, T(240));
+    // A shock is not a medication, and it is the newest thing on the log —
+    // so it must not be what "last epi" finds.
+    cr_engine_log_drug(e, &cr_drug_defibrillation, -1, T(250));
+
+    const cr_event_t *last = cr_session_last_med_named(&e->session, "epi");
+    CHECK(last != NULL);
+    if (last != NULL) {
+        CHECK_STR(last->title, "Epinephrine");
+        CHECK_I(last->date, T(240));                    // the NEWEST, not the first
+    }
+    // Case-folded both ways, exactly as the stats tally counts epi.
+    CHECK(cr_session_last_med_named(&e->session, "EPI") == last);
+    CHECK(cr_session_last_med_named(&e->session, "nephrin") == last);
+    CHECK(cr_session_last_med_named(&e->session, "atropine") == NULL);
+}
+
 // Port.medChipsKeepEpiAndDropTheStalest — six slots around the ring, and
 // the one the protocol is timed around never loses its place.
 static void test_med_chips_keep_epi_and_drop_the_stalest(void)
@@ -261,5 +312,7 @@ const cr_test_case_t cr_port_tests[] = {
     { "Port.longTextTruncatesOnACharacterBoundary", test_long_text_truncates_on_a_character_boundary },
     { "Port.clockFormattingMatchesTheWatch", test_clock_formatting_matches_the_watch },
     { "Port.statsTallyEveryMedByName", test_stats_tally_every_med_by_name },
+    { "Port.cprFractionReadsAsAPercent", test_cpr_fraction_reads_as_a_percent },
+    { "Port.handoffFindsTheLastEpiByName", test_handoff_finds_the_last_epi_by_name },
 };
 const size_t cr_port_test_count = sizeof cr_port_tests / sizeof cr_port_tests[0];

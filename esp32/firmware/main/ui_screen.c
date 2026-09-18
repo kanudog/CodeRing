@@ -14,6 +14,7 @@
 #include "cr_theme.h"
 #include "fonts/cr_fonts.h"
 #include "icons/cr_icons.h"
+#include "ui_flow.h"
 #include "ui_probe.h"
 
 static const char *TAG = "ui";
@@ -23,6 +24,12 @@ static const char *TAG = "ui";
 static const float cr_font_16_px = 16.0f;
 
 #define MAX_DEPTH 3
+
+/// Stamped in by the build (firmware/main/CMakeLists.txt). Zero when it is
+/// not, which shows a clock counting from midnight rather than a wrong one.
+#ifndef CR_BUILD_LOCAL_EPOCH
+#define CR_BUILD_LOCAL_EPOCH 0
+#endif
 
 /// The bottom of this panel is not fully visible the way the watch face was
 /// — the anchor pucks and the clock row sat slightly cut off. Everything in
@@ -66,7 +73,7 @@ static cr_pt_t lifted(cr_pt_t p)
 
 /// Labels are centred on a point, but their width changes with their text
 /// ("0:59" → "-10:05"), so the centre has to be re-applied, not just set once.
-#define MAX_CENTRED 24
+#define MAX_CENTRED 40
 static struct { lv_obj_t *obj; cr_pt_t center; } centred[MAX_CENTRED];
 static size_t centred_count;
 
@@ -83,9 +90,22 @@ static struct {
     lv_obj_t *wall_clock;
     lv_obj_t *pulse_button;
     lv_obj_t *check_title, *check_clock, *check_hint, *check_resume, *check_found;
+    // Post-ROSC. Shared chrome — header, patient strip, clocks, pucks, chips —
+    // is drawn by the same code at the same coordinates, so nothing shifts
+    // when the outcome changes; only the centre stack differs, plus the two
+    // capsules down the right edge.
+    lv_obj_t *vitals_ring;
+    lv_obj_t *vitals_label, *vitals_count, *rosc_elapsed, *vitals_prompt;
+    lv_obj_t *rosc_heart;
+    lv_obj_t *re_arrest, *handoff;
     lv_obj_t *pucks[4];
     struct { lv_obj_t *root, *name, *clock; } chips[6];
 } live;
+
+/// The end-of-code confirmation. Hidden until the flag is tapped.
+static struct {
+    lv_obj_t *root;
+} confirm;
 
 static struct {
     lv_obj_t *root;            // the whole overlay, hidden when closed
@@ -216,6 +236,47 @@ static lv_obj_t *make_disc(lv_obj_t *parent, const cr_disc_t *disc, const char *
     return button;
 }
 
+/// A progress ring. All three (CPR cycle, drug interval, post-ROSC vitals)
+/// are the same widget with a different hue, so they are built here rather
+/// than three times: the arc straddles its path, so the object has to be
+/// grown by one stroke width or the ring is clipped by its own box.
+static lv_obj_t *make_ring(lv_obj_t *parent, const cr_ring_t *ring, uint32_t color,
+                           const char *probe_name)
+{
+    lv_obj_t *arc = lv_arc_create(parent);
+    place(arc, ring->center, ring->diameter + ring->stroke, ring->diameter + ring->stroke);
+    lv_arc_set_rotation(arc, 270);
+    lv_arc_set_bg_angles(arc, 0, 360);
+    lv_arc_set_range(arc, 0, 1000);
+    lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
+    lv_obj_remove_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_width(arc, (int32_t)ring->stroke, 0);
+    lv_obj_set_style_arc_width(arc, (int32_t)ring->stroke, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(arc, lv_color_hex(CR_THEME_RING_TRACK), 0);
+    lv_obj_set_style_arc_color(arc, lv_color_hex(color), LV_PART_INDICATOR);
+    cr_probe_name(arc, probe_name);
+    return arc;
+}
+
+/// A pill-shaped control placed by its centre, like make_disc — the watch's
+/// `capsuleButton`. RE-ARREST and HANDOFF are the only two.
+static lv_obj_t *make_capsule(lv_obj_t *parent, const cr_text_t *spec, const char *title,
+                              uint32_t fill, uint32_t tint, lv_event_cb_t handler,
+                              const char *probe_name)
+{
+    lv_obj_t *button = lv_button_create(parent);
+    place(button, corner_safe(spec->center, spec->w, spec->h), spec->w, spec->h);
+    lv_obj_set_style_radius(button, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(button, lv_color_hex(fill), 0);
+    lv_obj_set_style_shadow_width(button, 0, 0);
+    lv_obj_set_style_border_width(button, 0, 0);
+    lv_obj_set_style_pad_all(button, 0, 0);
+    if (handler != NULL) lv_obj_add_event_cb(button, handler, LV_EVENT_CLICKED, NULL);
+    cr_probe_name(button, probe_name);
+    lv_obj_center(make_label(button, title, tint, spec->font));
+    return button;
+}
+
 // MARK: - Toast
 //
 // The only confirmation this board can give: no motor to tap the wrist, so
@@ -231,6 +292,21 @@ static void toast(const char *text, uint32_t color)
 {
     lv_label_set_text(live.toast, text);
     lv_obj_set_style_text_color(live.toast, lv_color_hex(color), 0);
+
+    // A snug pill for a short line, wrapped inside the table's box for a long
+    // one. The watch shrinks text to fit that box (minimumScaleFactor); LVGL
+    // cannot, and unbounded the longest string this screen shows — a refusal —
+    // sized itself to 613 px on a 410 px panel and hung 100 px off BOTH edges.
+    // ui_probe caught it; a photo would not have.
+    lv_label_set_long_mode(live.toast, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(live.toast, LV_SIZE_CONTENT);
+    lv_obj_update_layout(live.toast);
+    if (lv_obj_get_width(live.toast) > (int32_t)cr_screen.toast.w) {
+        lv_label_set_long_mode(live.toast, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(live.toast, (int32_t)cr_screen.toast.w);
+    }
+    recentre(live.toast, cr_screen.toast.center);
+
     lv_obj_remove_flag(live.toast, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(live.toast);
     lv_timer_t *timer = lv_timer_create(toast_hide_cb, 2000, NULL);   // 2 s, as on the watch
@@ -365,17 +441,99 @@ static void on_puck(lv_event_t *event)
 // different thing entirely); undo lives inside it, where you can see what
 // you are about to remove.
 
+/// HANDOFF is the watch's phone-call card: the same read-only list shape as
+/// the log and the timers, which is why it rides the same overlay rather than
+/// being a screen of its own. (The debrief after End is a screen — it is
+/// terminal, and it belongs to the flow.)
+typedef enum { SHEET_LOG, SHEET_TIMERS, SHEET_HANDOFF } sheet_mode_t;
+
 static struct {
     lv_obj_t *root, *title, *list, *undo_button, *undo_label;
-    bool is_log;
+    sheet_mode_t mode;
+    bool open;
 } sheet;
+
+/// One labelled value: a colour bar, the label above, the value below. The
+/// watch's `row` in HandoffView.
+static lv_obj_t *sheet_row(lv_obj_t *parent, const char *label, const char *value,
+                           uint32_t color);
+
+/// The wall clock, the same way the live screen derives it: stamped at build
+/// time and advanced by the monotonic clock. M5's RTC makes it survive a
+/// reboot; until then a reflash is what sets it.
+static void wall_clock_text(char *buf, size_t cap, cr_ms_t now)
+{
+    const int64_t wall = (int64_t)CR_BUILD_LOCAL_EPOCH + now / 1000;
+    snprintf(buf, cap, "%d:%02d:%02d", (int)((wall / 3600) % 24),
+             (int)((wall / 60) % 60), (int)(wall % 60));
+}
+
+/// The handoff card: everything PICU or transport asks for on the phone, in
+/// the watch's order, readable line by line while the code is still live.
+static void handoff_refresh(cr_ms_t now)
+{
+    const cr_session_t *s = &engine->session;
+    cr_stats_t stats;
+    cr_session_stats(s, now, &stats);
+    char line[96], clock[16];
+
+    snprintf(line, sizeof line, "%.1f kg · %s", s->patient.weight_kg,
+             engine->protocol.short_name);
+    sheet_row(sheet.list, "PATIENT", line, CR_THEME_CPR);
+
+    if (stats.has_rosc) {
+        cr_format_clock(clock, sizeof clock, CR_SEC(stats.seconds_to_rosc));
+        sheet_row(sheet.list, "ARREST DURATION", clock, CR_THEME_MED);
+    }
+
+    cr_format_clock(clock, sizeof clock, cr_engine_elapsed(engine, now));
+    sheet_row(sheet.list, "TOTAL CODE", clock, CR_THEME_CPR);
+
+    // "×2 — last 1:40 ago". Found by NAME, as on the watch, so a custom
+    // adrenaline entry counts the same way the stats tally counts it.
+    const cr_event_t *last_epi = cr_session_last_med_named(s, "epi");
+    if (stats.epi_count > 0 && last_epi != NULL) {
+        cr_format_clock(clock, sizeof clock, now - last_epi->date);
+        snprintf(line, sizeof line, "×%d — last %s ago", (int)stats.epi_count, clock);
+    } else {
+        snprintf(line, sizeof line, "×0");
+    }
+    sheet_row(sheet.list, "EPI", line, CR_THEME_MED);
+
+    snprintf(line, sizeof line, "×%d", (int)stats.shock_count);
+    sheet_row(sheet.list, "SHOCKS", line, CR_THEME_SHOCK);
+
+    if (s->rosc != CR_TIME_NONE) {
+        wall_clock_text(clock, sizeof clock, s->rosc);
+        sheet_row(sheet.list, "ROSC AT", clock, CR_THEME_ROSC);
+    }
+    if (engine->rosc_achieved) {
+        cr_format_clock(clock, sizeof clock, cr_engine_rosc_elapsed(engine, now));
+        sheet_row(sheet.list, "POST-ROSC", clock, CR_THEME_ROSC);
+    }
+
+    // Every line of access, because the first question on the phone is what
+    // the drugs are going through.
+    for (uint16_t i = 0; i < s->event_count; i++) {
+        const cr_event_t *ev = &s->events[i];
+        if (ev->category != CR_CAT_ACCESS) continue;
+        sheet_row(sheet.list, "ACCESS", ev->detail[0] ? ev->detail : ev->title,
+                  cr_event_tint(ev));
+    }
+}
 
 static void sheet_refresh(void)
 {
     lv_obj_clean(sheet.list);
     char line[CR_TITLE_MAX + CR_DETAIL_MAX + 24];
 
-    if (sheet.is_log) {
+    if (sheet.mode == SHEET_HANDOFF) {
+        lv_label_set_text(sheet.title, "HANDOFF");
+        handoff_refresh(clock_ms());
+        return;
+    }
+
+    if (sheet.mode == SHEET_LOG) {
         lv_label_set_text_fmt(sheet.title, "LOG · %d", (int)engine->session.event_count);
         // Newest first: mid-code you are checking what just happened.
         for (int i = (int)engine->session.event_count - 1; i >= 0; i--) {
@@ -410,22 +568,24 @@ static void sheet_refresh(void)
 static void sheet_close(lv_event_t *event)
 {
     (void)event;
+    sheet.open = false;
     lv_obj_add_flag(sheet.root, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void sheet_open(bool is_log)
+static void sheet_open(sheet_mode_t mode)
 {
-    sheet.is_log = is_log;
-    // Undo belongs with the history, not with the timers list.
-    if (is_log) lv_obj_remove_flag(sheet.undo_button, LV_OBJ_FLAG_HIDDEN);
+    sheet.mode = mode;
+    sheet.open = true;
+    // Undo belongs with the history, not with the timers or the handoff card.
+    if (mode == SHEET_LOG) lv_obj_remove_flag(sheet.undo_button, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(sheet.undo_button, LV_OBJ_FLAG_HIDDEN);
     sheet_refresh();
     lv_obj_remove_flag(sheet.root, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(sheet.root);
 }
 
-static void on_log(lv_event_t *event) { (void)event; sheet_open(true); }
-static void on_timers(lv_event_t *event) { (void)event; sheet_open(false); }
+static void on_log(lv_event_t *event) { (void)event; sheet_open(SHEET_LOG); }
+static void on_timers(lv_event_t *event) { (void)event; sheet_open(SHEET_TIMERS); }
 
 static void on_sheet_undo(lv_event_t *event)
 {
@@ -436,6 +596,40 @@ static void on_sheet_undo(lv_event_t *event)
     if (cr_engine_undo_last(engine, NULL)) toast(what, CR_THEME_SHOCK);
     else toast("NOTHING LOGGED — nothing to undo", CR_THEME_MED);
     sheet_refresh();
+}
+
+static lv_obj_t *sheet_row(lv_obj_t *parent, const char *label, const char *value,
+                           uint32_t color)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_set_size(row, (int32_t)(cr_screen.width - 70), 72);
+    lv_obj_set_style_bg_color(row, lv_color_hex(CR_THEME_SURFACE), 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_radius(row, 10, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);
+
+    // The colour bar down the left edge is the only thing that says which
+    // category a number belongs to, so it is not decoration.
+    lv_obj_t *bar = lv_obj_create(row);
+    lv_obj_set_size(bar, 5, 52);
+    lv_obj_set_pos(bar, 8, 10);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(bar, 0, 0);
+    lv_obj_set_style_radius(bar, 2, 0);
+
+    // 9 pt caption over a 14 pt value on the watch — the two generated sizes
+    // either side of ×2.071.
+    lv_obj_t *caption = make_label(row, label, CR_THEME_TEXT_DIM, cr_font_16_px);
+    lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_pos(caption, 22, 8);
+    lv_obj_t *text = make_label(row, value, CR_THEME_TEXT, 29.0f);
+    lv_obj_set_style_text_align(text, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_pos(text, 22, 30);
+    return row;
 }
 
 static void sheet_create(lv_obj_t *parent)
@@ -489,6 +683,18 @@ static void sheet_create(lv_obj_t *parent)
 static void on_ring(lv_event_t *event)
 {
     (void)event;
+    // Post-ROSC the ring is the vitals-confirmed target, exactly as it is the
+    // pulse-check target during the arrest. Same object, because the table
+    // puts the vitals ring on the CPR ring's centre and diameter.
+    if (engine->rosc_achieved) {
+        cr_ms_t left = 0;
+        if (cr_engine_vitals_remaining(engine, clock_ms(), &left) && left > CR_SEC(15)) {
+            toast("NOTHING LOGGED — vitals not due", CR_THEME_MED);
+            return;
+        }
+        report(cr_engine_confirm_vitals(engine, clock_ms()), "vitals reassessed");
+        return;
+    }
     if (!engine->cpr_started) {
         report(cr_engine_start_cpr(engine, clock_ms()), "start CPR");
         return;
@@ -531,6 +737,50 @@ static void on_pause(lv_event_t *event)
     report(cr_engine_toggle_pause(engine, clock_ms()), "pause");
 }
 
+/// Pulses lost. The engine deliberately leaves the drug anchors alone — time
+/// since the last epi still matters on the way back down.
+static void on_re_arrest(lv_event_t *event)
+{
+    (void)event;
+    report(cr_engine_re_arrest(engine, clock_ms()), "re-arrest");
+}
+
+static void on_handoff(lv_event_t *event)
+{
+    (void)event;
+    sheet_open(SHEET_HANDOFF);
+}
+
+/// The flag asks first. Every other control on this screen either logs
+/// something undoable or changes a clock; this one is the only door out of a
+/// running code, and there is no un-end.
+static void on_flag(lv_event_t *event)
+{
+    (void)event;
+    lv_obj_remove_flag(confirm.root, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(confirm.root);
+}
+
+static void on_confirm_cancel(lv_event_t *event)
+{
+    (void)event;
+    lv_obj_add_flag(confirm.root, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void on_confirm_end(lv_event_t *event)
+{
+    (void)event;
+    lv_obj_add_flag(confirm.root, LV_OBJ_FLAG_HIDDEN);
+    // Nothing from the live screen may be left open behind the debrief: a fan
+    // or a sheet still showing would be the first thing on screen if a second
+    // code starts.
+    fan_close();
+    sheet.open = false;
+    lv_obj_add_flag(sheet.root, LV_OBJ_FLAG_HIDDEN);
+    cr_engine_end(engine, clock_ms());
+    ui_flow_show_summary();
+}
+
 void ui_create(cr_engine_t *e, cr_ms_t (*clock)(void))
 {
     engine = e;
@@ -547,39 +797,19 @@ void ui_create(cr_engine_t *e, cr_ms_t (*clock)(void))
     lv_obj_set_style_text_font(screen, &cr_font_28, 0);
 
     // The CPR ring, and the countdown stack inside it.
-    live.cpr_ring = lv_arc_create(screen);
-    place(live.cpr_ring, cr_screen.cpr_ring.center,
-          cr_screen.cpr_ring.diameter + cr_screen.cpr_ring.stroke,
-          cr_screen.cpr_ring.diameter + cr_screen.cpr_ring.stroke);
-    lv_arc_set_rotation(live.cpr_ring, 270);
-    lv_arc_set_bg_angles(live.cpr_ring, 0, 360);
-    lv_arc_set_range(live.cpr_ring, 0, 1000);
-    lv_obj_remove_style(live.cpr_ring, NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(live.cpr_ring, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(live.cpr_ring, (int32_t)cr_screen.cpr_ring.stroke, 0);
-    lv_obj_set_style_arc_width(live.cpr_ring, (int32_t)cr_screen.cpr_ring.stroke, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(live.cpr_ring, lv_color_hex(CR_THEME_RING_TRACK), 0);
-    lv_obj_set_style_arc_color(live.cpr_ring, lv_color_hex(CR_THEME_CPR), LV_PART_INDICATOR);
-    cr_probe_name(live.cpr_ring, "cpr.ring");
+    live.cpr_ring = make_ring(screen, &cr_screen.cpr_ring, CR_THEME_CPR, "cpr.ring");
 
     // The inner ring is the epi interval — the watch draws it inside the CPR
     // ring so one glance covers both clocks.
-    live.drug_ring = lv_arc_create(screen);
-    place(live.drug_ring, cr_screen.drug_ring.center,
-          cr_screen.drug_ring.diameter + cr_screen.drug_ring.stroke,
-          cr_screen.drug_ring.diameter + cr_screen.drug_ring.stroke);
-    lv_arc_set_rotation(live.drug_ring, 270);
-    lv_arc_set_bg_angles(live.drug_ring, 0, 360);
-    lv_arc_set_range(live.drug_ring, 0, 1000);
-    lv_obj_remove_style(live.drug_ring, NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(live.drug_ring, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(live.drug_ring, (int32_t)cr_screen.drug_ring.stroke, 0);
-    lv_obj_set_style_arc_width(live.drug_ring, (int32_t)cr_screen.drug_ring.stroke, LV_PART_INDICATOR);
+    live.drug_ring = make_ring(screen, &cr_screen.drug_ring, CR_THEME_MED, "drug.ring");
     lv_obj_set_style_arc_opa(live.drug_ring, LV_OPA_20, 0);
-    lv_obj_set_style_arc_color(live.drug_ring, lv_color_hex(CR_THEME_RING_TRACK), 0);
-    lv_obj_set_style_arc_color(live.drug_ring, lv_color_hex(CR_THEME_MED), LV_PART_INDICATOR);
     lv_obj_add_flag(live.drug_ring, LV_OBJ_FLAG_HIDDEN);
-    cr_probe_name(live.drug_ring, "drug.ring");
+
+    // The vitals ring takes the CPR ring's exact place post-ROSC — same
+    // centre, same diameter in the table — so the eye does not have to move
+    // when the outcome changes.
+    live.vitals_ring = make_ring(screen, &cr_screen.vitals_ring, CR_THEME_ROSC, "vitals.ring");
+    lv_obj_add_flag(live.vitals_ring, LV_OBJ_FLAG_HIDDEN);
 
     // A transparent disc over the ring's middle takes the tap, so the target
     // is the whole centre rather than the 8 px stroke.
@@ -655,8 +885,9 @@ void ui_create(cr_engine_t *e, cr_ms_t (*clock)(void))
               CR_THEME_TEXT, on_timers, NULL, "btn.timers");
     make_disc(screen, &cr_screen.mute_button, "speaker.slash.fill", CR_THEME_SURFACE,
               CR_THEME_TEXT_DIM, NULL, NULL, "btn.mute");
+    // Red, as on the watch: the one control here that ends things.
     make_disc(screen, &cr_screen.flag_button, "flag.fill", CR_THEME_SURFACE,
-              CR_THEME_TEXT, NULL, NULL, "btn.flag");
+              CR_THEME_MED, on_flag, NULL, "btn.flag");
     live.pause_button = make_disc(screen, &cr_screen.pause_button, "pause.fill",
                                   CR_THEME_SURFACE, CR_THEME_PAUSE, on_pause, NULL, "btn.pause");
 
@@ -763,6 +994,65 @@ void ui_create(cr_engine_t *e, cr_ms_t (*clock)(void))
     cr_probe_name(live.check_found, "btn.pulsefound");
     lv_obj_center(make_label(live.check_found, "PULSE FOUND", CR_THEME_ROSC, cr_font_16_px));
 
+    // MARK: Post-ROSC
+    //
+    // Every position is the table's own entry, even where it coincides with a
+    // CPR-phase one (vitals ring = CPR ring, vitals count = countdown), so the
+    // probe checks each against the number Sebastian placed rather than
+    // against a neighbour that happens to share it.
+    live.rosc_elapsed = make_label(screen, "ROSC 0:00", CR_THEME_ROSC,
+                                   cr_screen.rosc_elapsed.font);
+    place_text(live.rosc_elapsed, &cr_screen.rosc_elapsed);
+    cr_probe_name(live.rosc_elapsed, "rosc.elapsed");
+
+    live.vitals_label = make_label(screen, "NEXT VITALS", CR_THEME_TEXT_DIM,
+                                   cr_screen.vitals_label.font);
+    place_text(live.vitals_label, &cr_screen.vitals_label);
+    cr_probe_name(live.vitals_label, "vitals.label");
+
+    live.vitals_count = make_label(screen, "5:00", CR_THEME_TEXT, cr_screen.vitals_count.font);
+    place_text(live.vitals_count, &cr_screen.vitals_count);
+    cr_probe_name(live.vitals_count, "vitals.count");
+
+    // The prompt only appears inside the last 15 s, so it reads as "now"
+    // rather than as another label that is always there.
+    live.vitals_prompt = make_label(screen, "TAP — VITALS", CR_THEME_BG,
+                                    cr_screen.vitals_prompt.font);
+    lv_obj_set_style_bg_color(live.vitals_prompt, lv_color_hex(CR_THEME_ROSC), 0);
+    lv_obj_set_style_bg_opa(live.vitals_prompt, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(live.vitals_prompt, 14, 0);
+    lv_obj_set_style_pad_ver(live.vitals_prompt, 4, 0);
+    lv_obj_set_style_radius(live.vitals_prompt, LV_RADIUS_CIRCLE, 0);
+    place_text(live.vitals_prompt, &cr_screen.vitals_prompt);
+    cr_probe_name(live.vitals_prompt, "vitals.prompt");
+
+    // Only reachable if a protocol ships no vitals cadence — every built-in
+    // one does. It is what the table's rosc_heart entry is for.
+    live.rosc_heart = lv_image_create(screen);
+    {
+        const lv_image_dsc_t *heart = cr_icon("heart.fill");
+        if (heart != NULL) lv_image_set_src(live.rosc_heart, heart);
+        lv_obj_set_style_image_recolor(live.rosc_heart, lv_color_hex(CR_THEME_ROSC), 0);
+        lv_obj_set_style_image_recolor_opa(live.rosc_heart, LV_OPA_COVER, 0);
+        lv_image_set_scale(live.rosc_heart,
+                           (int32_t)(cr_screen.rosc_heart.glyph / 52.0f * 256.0f));
+        place(live.rosc_heart, cr_screen.rosc_heart.center,
+              cr_screen.rosc_heart.diameter, cr_screen.rosc_heart.diameter);
+        cr_probe_name(live.rosc_heart, "rosc.heart");
+    }
+
+    live.re_arrest = make_capsule(screen, &cr_screen.re_arrest, "RE-ARREST",
+                                  CR_THEME_MED, CR_THEME_BG, on_re_arrest, "btn.rearrest");
+    live.handoff = make_capsule(screen, &cr_screen.handoff, "HANDOFF",
+                                CR_THEME_SURFACE_HI, CR_THEME_ROSC, on_handoff, "btn.handoff");
+
+    lv_obj_t *const rosc_parts[] = { live.rosc_elapsed, live.vitals_label, live.vitals_count,
+                                     live.vitals_prompt, live.rosc_heart, live.re_arrest,
+                                     live.handoff };
+    for (size_t i = 0; i < sizeof rosc_parts / sizeof rosc_parts[0]; i++) {
+        lv_obj_add_flag(rosc_parts[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
     // Med timer chips ride around the ring: what has been given, how many
     // times, and how long ago. Hand-placed, so the column pitch is not quite
     // uniform — that is deliberate.
@@ -797,15 +1087,93 @@ void ui_create(cr_engine_t *e, cr_ms_t (*clock)(void))
               CR_THEME_PAD_ICON, on_cancel, NULL, "pad.cancel");
     fan.back_pad = make_disc(fan.root, &cr_screen.pads.back, "chevron.backward", CR_THEME_PAD_FILL,
                              CR_THEME_PAD_ICON, on_back, NULL, "pad.back");
-}
 
-#ifndef CR_BUILD_LOCAL_EPOCH
-#define CR_BUILD_LOCAL_EPOCH 0
-#endif
+    // MARK: End-code confirmation
+    //
+    // These four coordinates are the only ones on this screen that are NOT
+    // from the layout table, and they cannot be: watchOS put this behind a
+    // system confirmationDialog, which has no geometry to port. Centred in the
+    // middle band, clear of the pucks, and topmost so nothing underneath can
+    // take the touch.
+    confirm.root = lv_obj_create(screen);
+    lv_obj_set_size(confirm.root, (int32_t)cr_screen.width, (int32_t)cr_screen.height);
+    lv_obj_set_pos(confirm.root, 0, 0);
+    lv_obj_set_style_bg_color(confirm.root, lv_color_hex(CR_THEME_BG), 0);
+    lv_obj_set_style_bg_opa(confirm.root, LV_OPA_90, 0);
+    lv_obj_set_style_border_width(confirm.root, 0, 0);
+    lv_obj_set_style_radius(confirm.root, 0, 0);
+    lv_obj_set_style_pad_all(confirm.root, 0, 0);
+    lv_obj_remove_flag(confirm.root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(confirm.root, LV_OBJ_FLAG_HIDDEN);
+    cr_probe_name(confirm.root, "confirm.root");
+
+    lv_obj_t *confirm_title = make_label(confirm.root, "END CODE?", CR_THEME_TEXT, 33.0f);
+    place_label(confirm_title, (cr_pt_t){ cr_screen.width / 2, 168 });
+    cr_probe_name(confirm_title, "confirm.title");
+    lv_obj_t *confirm_note = make_label(confirm.root, "the clocks stop — the record stays",
+                                        CR_THEME_TEXT_DIM, cr_font_16_px);
+    place_label(confirm_note, (cr_pt_t){ cr_screen.width / 2, 214 });
+    cr_probe_name(confirm_note, "confirm.note");
+
+    const cr_text_t end_spec = { { cr_screen.width / 2, 292.0f }, 288.0f, 66.0f, 22.0f };
+    const cr_text_t cancel_spec = { { cr_screen.width / 2, 376.0f }, 224.0f, 58.0f, 20.0f };
+    make_capsule(confirm.root, &end_spec, "END & REVIEW", CR_THEME_MED, CR_THEME_BG,
+                 on_confirm_end, "confirm.end");
+    make_capsule(confirm.root, &cancel_spec, "CANCEL", CR_THEME_SURFACE_HI, CR_THEME_TEXT,
+                 on_confirm_cancel, "confirm.cancel");
+}
 
 lv_obj_t *ui_live_screen(void)
 {
     return live.root;
+}
+
+/// The post-ROSC centre stack. The vitals cadence counts down where the cycle
+/// counted down, in the same ring and the same digits, because post-ROSC the
+/// question changes but the shape of the answer does not.
+static void rosc_tick(cr_ms_t now)
+{
+    char buf[32];
+    const cr_timer_spec_t *spec = cr_protocol_vitals_spec(&engine->protocol);
+    cr_ms_t left = 0;
+    const bool has_cadence = cr_engine_vitals_remaining(engine, now, &left);
+    const bool over = has_cadence && left <= 0;
+    const bool due = has_cadence && left <= CR_SEC(15);
+
+    cr_format_clock(buf, sizeof buf, cr_engine_rosc_elapsed(engine, now));
+    lv_label_set_text_fmt(live.rosc_elapsed, "ROSC %s", buf);
+
+    int32_t value = 0;
+    if (has_cadence && spec != NULL && spec->duration_ms > 0 && left > 0) {
+        value = (int32_t)(left * 1000 / spec->duration_ms);
+    }
+    lv_arc_set_value(live.vitals_ring, value);
+    lv_obj_set_style_arc_color(live.vitals_ring,
+                               lv_color_hex(over ? CR_THEME_MED : CR_THEME_ROSC),
+                               LV_PART_INDICATOR);
+
+    if (has_cadence) {
+        cr_format_clock_signed(buf, sizeof buf, left);
+        lv_label_set_text(live.vitals_count, buf);
+        lv_obj_set_style_text_color(live.vitals_count,
+                                   lv_color_hex(over ? CR_THEME_MED : CR_THEME_TEXT), 0);
+        lv_obj_set_style_text_color(live.vitals_label,
+                                   lv_color_hex(over ? CR_THEME_MED : CR_THEME_TEXT_DIM), 0);
+        lv_obj_set_style_bg_color(live.vitals_prompt,
+                                  lv_color_hex(over ? CR_THEME_MED : CR_THEME_ROSC), 0);
+    }
+
+    // With a cadence: the label, the countdown, and the prompt inside the last
+    // 15 s. Without one: just the heart, because there is nothing to count.
+    lv_obj_t *const counted[] = { live.vitals_label, live.vitals_count };
+    for (size_t i = 0; i < sizeof counted / sizeof counted[0]; i++) {
+        if (has_cadence) lv_obj_remove_flag(counted[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(counted[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    if (has_cadence && due) lv_obj_remove_flag(live.vitals_prompt, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(live.vitals_prompt, LV_OBJ_FLAG_HIDDEN);
+    if (has_cadence) lv_obj_add_flag(live.rosc_heart, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_remove_flag(live.rosc_heart, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_tick(void)
@@ -816,15 +1184,17 @@ void ui_tick(void)
     // Wall clock. Stamped at build time and advanced by the monotonic clock;
     // M5 replaces this with the board's PCF85063 RTC, which survives a
     // reboot and does not need reflashing to stay right.
-    const int64_t wall = (int64_t)CR_BUILD_LOCAL_EPOCH + now / 1000;
-    lv_label_set_text_fmt(live.wall_clock, "%d:%02d:%02d",
-                          (int)((wall / 3600) % 24), (int)((wall / 60) % 60), (int)(wall % 60));
+    wall_clock_text(buf, sizeof buf, now);
+    lv_label_set_text(live.wall_clock, buf);
 
     const cr_ms_t cycle = cr_engine_cycle_remaining(engine, now);
     const cr_timer_spec_t *spec = cr_protocol_cycle_spec(&engine->protocol);
     const bool overdue = cycle <= 0;
+    const bool rosc = engine->rosc_achieved;
 
-    if (engine->cpr_started) {
+    if (rosc) {
+        rosc_tick(now);
+    } else if (engine->cpr_started) {
         lv_obj_add_flag(live.start_text, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(live.countdown, LV_OBJ_FLAG_HIDDEN);
         cr_format_clock_signed(buf, sizeof buf, cycle);
@@ -849,6 +1219,38 @@ void ui_tick(void)
         lv_label_set_text(live.cycle_chip, "");
     }
 
+    // The centre of the screen belongs to exactly one outcome, so the other
+    // one's parts go away wholesale rather than being reasoned about control by
+    // control — the same reason the watch made roscStack its own branch. The
+    // header, the patient strip, the clocks, the pucks and the chips are NOT in
+    // either list: they are drawn by the same code at the same coordinates in
+    // both states, so nothing shifts when the outcome changes.
+    lv_obj_t *const cpr_only[] = { live.countdown, live.cycle_chip, live.start_text };
+    lv_obj_t *const rosc_only[] = { live.vitals_ring, live.rosc_elapsed,
+                                    live.re_arrest, live.handoff };
+    // These three set their own visibility above, every frame, so here they
+    // only ever need hiding.
+    for (size_t i = 0; i < sizeof cpr_only / sizeof cpr_only[0]; i++) {
+        if (rosc) lv_obj_add_flag(cpr_only[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    // The CPR ring is the exception, and it cost a re-arrest to find out: it
+    // had never needed hiding before ROSC existed, so nothing restored it, and
+    // a re-arrest came back to a bare countdown with no ring around it. Its
+    // visibility is purely the state's, so it is set BOTH ways.
+    if (rosc) lv_obj_add_flag(live.cpr_ring, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_remove_flag(live.cpr_ring, LV_OBJ_FLAG_HIDDEN);
+    for (size_t i = 0; i < sizeof rosc_only / sizeof rosc_only[0]; i++) {
+        if (rosc) lv_obj_remove_flag(rosc_only[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(rosc_only[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    if (!rosc) {
+        // The four rosc_tick owns; it never runs outside ROSC to hide them.
+        lv_obj_add_flag(live.vitals_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(live.vitals_count, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(live.vitals_prompt, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(live.rosc_heart, LV_OBJ_FLAG_HIDDEN);
+    }
+
     cr_format_clock(buf, sizeof buf, cr_engine_elapsed(engine, now));
     lv_label_set_text(live.code_clock, buf);
 
@@ -860,7 +1262,7 @@ void ui_tick(void)
     // The epi line under the countdown: dim while idle, because a countdown
     // for a med nobody has given yet reads as a standing order.
     const cr_timer_spec_t *epi = cr_protocol_interval_spec(&engine->protocol, 0);
-    if (epi != NULL) {
+    if (epi != NULL && !rosc) {
         bool running = cr_engine_interval_is_running(engine, epi);
         cr_format_clock_signed(buf, sizeof buf, cr_engine_interval_remaining(engine, epi, now));
         lv_label_set_text_fmt(live.drug_line, "%s %s", epi->title, buf);
@@ -871,7 +1273,9 @@ void ui_tick(void)
                                                                         : CR_THEME_TEXT_DIM), 0);
     }
 
-    if (engine->paused) lv_obj_remove_flag(live.paused_text, LV_OBJ_FLAG_HIDDEN);
+    // ROSC closes any open pause, so this is belt and braces — but a stale
+    // PAUSED over the vitals countdown would be a lie about the clock.
+    if (engine->paused && !rosc) lv_obj_remove_flag(live.paused_text, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(live.paused_text, LV_OBJ_FLAG_HIDDEN);
 
     // Pause only exists once there are compressions to pause.
@@ -909,9 +1313,11 @@ void ui_tick(void)
         lv_obj_add_flag(live.countdown, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(live.drug_line, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(live.cycle_chip, LV_OBJ_FLAG_HIDDEN);
-    } else {
+    } else if (!rosc) {
         lv_obj_remove_flag(live.drug_line, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(live.cycle_chip, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(live.drug_line, LV_OBJ_FLAG_HIDDEN);
     }
 
     // The chips around the ring.
@@ -939,7 +1345,7 @@ void ui_tick(void)
 
     // The inner ring only exists once a dose has been given: a countdown for
     // a med nobody has given yet reads as a standing order.
-    if (epi != NULL && cr_engine_interval_is_running(engine, epi)) {
+    if (epi != NULL && !rosc && cr_engine_interval_is_running(engine, epi)) {
         const cr_ms_t left = cr_engine_interval_remaining(engine, epi, now);
         int32_t value = 0;
         if (epi->duration_ms > 0 && left > 0) value = (int32_t)(left * 1000 / epi->duration_ms);
@@ -948,5 +1354,28 @@ void ui_tick(void)
         lv_obj_remove_flag(live.drug_ring, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(live.drug_ring, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // The timers list and the handoff card show live numbers ("last epi 1:40
+    // ago"), so they have to keep up — once a second, not every frame, and
+    // holding the scroll position, because rebuilding the rows under a finger
+    // that is scrolling snaps the list back to the top. The LOG is deliberately
+    // not in here: the watch hands it a copy of the events, so it is a snapshot
+    // of the moment it was opened, and undo refreshes it itself.
+    static cr_ms_t sheet_refreshed_at;
+    if (sheet.open && sheet.mode != SHEET_LOG && now - sheet_refreshed_at >= CR_SEC(1)) {
+        sheet_refreshed_at = now;
+        const int32_t scroll = lv_obj_get_scroll_y(sheet.list);
+        sheet_refresh();
+        lv_obj_scroll_to_y(sheet.list, scroll, LV_ANIM_OFF);
+    }
+
+    // Measure, don't eyeball. The boot dump proves where the ROSC stack WOULD
+    // land, but it is hidden then; this prints what a real pulse-found actually
+    // put on the glass, once, the first time it happens.
+    static bool rosc_dumped;
+    if (rosc && !rosc_dumped) {
+        rosc_dumped = true;
+        cr_probe_dump(live.root, "post-ROSC layout");
     }
 }

@@ -8,14 +8,26 @@
 static const char *TAG = "probe";
 
 /// Intent, recorded next to the object it belongs to. Small and fixed: the
-/// live screen has ~30 controls and a fan adds 8 more.
-#define MAX_EXPECTED 64
+/// live screen has ~40 controls (the ROSC stack included) and a fan adds 8.
+#define MAX_EXPECTED 96
 static struct { const lv_obj_t *obj; float x, y; } expected[MAX_EXPECTED];
 static size_t expected_count;
 static int drifted;
 
 void cr_probe_expect(lv_obj_t *obj, float x, float y)
 {
+    // RE-placing an object overwrites its intent instead of appending a
+    // second row. A fan is re-laid-out every time it opens, so appending
+    // filled the table with stale coordinates from earlier fans — and the
+    // lookup takes the FIRST match, which meant a dump taken after using the
+    // app reported drift against a position nothing had asked for. A
+    // measurement tool that lies is worse than none.
+    for (size_t i = 0; i < expected_count; i++) {
+        if (expected[i].obj != obj) continue;
+        expected[i].x = x;
+        expected[i].y = y;
+        return;
+    }
     if (expected_count >= MAX_EXPECTED) return;
     expected[expected_count].obj = obj;
     expected[expected_count].x = x;

@@ -184,6 +184,17 @@ void cr_session_stats(const cr_session_t *s, cr_ms_t now, cr_stats_t *out)
     }
 }
 
+const cr_event_t *cr_session_last_med_named(const cr_session_t *s, const char *needle)
+{
+    if (s == NULL || needle == NULL) return NULL;
+    for (int i = (int)s->event_count - 1; i >= 0; i--) {
+        const cr_event_t *ev = &s->events[i];
+        if (ev->category != CR_CAT_MEDICATION) continue;
+        if (contains_ci(ev->title, needle)) return ev;
+    }
+    return NULL;
+}
+
 size_t cr_session_med_chips(const cr_session_t *s, const char *keep_key,
                             cr_med_chip_t *out, size_t cap)
 {

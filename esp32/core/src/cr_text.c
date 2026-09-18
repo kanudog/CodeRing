@@ -66,6 +66,16 @@ void cr_format_trim(char *buf, size_t cap, double value)
     if (n > 0 && buf[n - 1] == '.') buf[--n] = '\0';
 }
 
+void cr_format_percent(char *buf, size_t cap, double fraction)
+{
+    if (cap == 0) return;
+    if (!isfinite(fraction)) { cr_copy_utf8(buf, cap, "—"); return; }
+    // Swift's String(format:) is this same printf, so "%.0f" rounds
+    // identically — including 0.5 to even, which is why it is not rewritten
+    // as an integer cast here.
+    snprintf(buf, cap, "%.0f%%", fraction * 100.0);
+}
+
 /// Number of UTF-8 characters in the first `len` bytes.
 static size_t utf8_count(const char *s, size_t len)
 {

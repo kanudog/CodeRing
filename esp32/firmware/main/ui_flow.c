@@ -1,4 +1,4 @@
-// ui_flow.c — home, and the setup that precedes a code.
+// ui_flow.c — home, the setup that precedes a code, and the debrief after it.
 //
 // The order is Sebastian's, and deliberate (watch, 2026-08-22): setup starts
 // at WEIGHT, not at a protocol picker. You rarely know the rhythm at t=0,
@@ -17,6 +17,8 @@
 #include "cr_engine.h"
 #include "cr_layout.h"
 #include "cr_patient.h"
+#include "cr_session.h"
+#include "cr_text.h"
 #include "cr_theme.h"
 #include "fonts/cr_fonts.h"
 #include "icons/cr_icons.h"
@@ -36,6 +38,8 @@ static lv_obj_t *protocol_screen;
 static lv_obj_t *age_screen;
 static lv_obj_t *age_readout;
 static lv_obj_t *age_estimate_label;
+static lv_obj_t *summary_screen;
+static lv_obj_t *summary_banner, *summary_banner_label, *summary_list;
 static lv_obj_t *chip_protocol_value;
 static lv_obj_t *chip_weight_value;
 static lv_obj_t *chip_age_value;
@@ -579,6 +583,178 @@ static void build_weight(void)
     lv_obj_center(back_label);
 }
 
+// MARK: - Summary
+//
+// The debrief after End, and the counterpart of SummaryView: the numbers a
+// code is reviewed by, then every drug with its count, then the whole log.
+// It is built once and filled from the session each time it is shown — a
+// finished code cannot change, so unlike the live screen it does not tick.
+
+/// A label and a value on one line, the shape SummaryView's StatTile has.
+static void summary_stat(const char *label, const char *value, uint32_t color)
+{
+    lv_obj_t *row = lv_obj_create(summary_list);
+    lv_obj_set_size(row, 330, 46);
+    lv_obj_set_style_bg_color(row, lv_color_hex(CR_THEME_SURFACE), 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_radius(row, 10, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *caption = lv_label_create(row);
+    lv_label_set_text(caption, label);
+    lv_obj_set_style_text_color(caption, lv_color_hex(CR_THEME_TEXT_DIM), 0);
+    lv_obj_set_style_text_font(caption, &cr_font_16, 0);
+    lv_obj_align(caption, LV_ALIGN_LEFT_MID, 14, 0);
+
+    lv_obj_t *text = lv_label_create(row);
+    lv_label_set_text(text, value);
+    lv_obj_set_style_text_color(text, lv_color_hex(color), 0);
+    lv_obj_set_style_text_font(text, &cr_font_28, 0);
+    lv_obj_align(text, LV_ALIGN_RIGHT_MID, -14, 0);
+}
+
+/// A plain line, for the med tally and the log.
+static void summary_line(const char *text, uint32_t color, const lv_font_t *font)
+{
+    lv_obj_t *label = lv_label_create(summary_list);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    lv_obj_set_style_text_font(label, font, 0);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_width(label, 330);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+}
+
+static void refresh_summary(void)
+{
+    const cr_session_t *s = &engine->session;
+    cr_stats_t stats;
+    cr_session_stats(s, clock_ms(), &stats);
+
+    const bool rosc = s->rosc != CR_TIME_NONE;
+    lv_label_set_text(summary_banner_label, rosc ? "ROSC ACHIEVED" : "CODE ENDED");
+    lv_obj_set_style_text_color(summary_banner_label,
+                               lv_color_hex(rosc ? CR_THEME_BG : CR_THEME_TEXT), 0);
+    lv_obj_set_style_bg_color(summary_banner,
+                              lv_color_hex(rosc ? CR_THEME_ROSC : CR_THEME_SURFACE_HI), 0);
+
+    lv_obj_clean(summary_list);
+    char value[48], line[CR_TITLE_MAX + CR_DETAIL_MAX + 24];
+
+    cr_format_clock(value, sizeof value, stats.total_ms);
+    summary_stat("Duration", value, CR_THEME_TEXT);
+    cr_format_percent(value, sizeof value, stats.cpr_fraction);
+    summary_stat("CPR", value, CR_THEME_CPR);
+    snprintf(value, sizeof value, "×%d", (int)stats.epi_count);
+    summary_stat("Epi", value, CR_THEME_MED);
+    snprintf(value, sizeof value, "×%d", (int)stats.shock_count);
+    summary_stat("Shocks", value, CR_THEME_SHOCK);
+    snprintf(value, sizeof value, "×%d", (int)stats.rhythm_check_count);
+    summary_stat("Rhythm ✓", value, CR_THEME_RHYTHM);
+    snprintf(value, sizeof value, "%d", (int)stats.pause_count);
+    summary_stat("Pauses", value, CR_THEME_TEXT);
+    // Both are "how long into the code", so they read as offsets (+m:ss), not
+    // durations — the same distinction the watch draws with crOffset.
+    if (stats.has_first_epi) {
+        cr_format_offset(value, sizeof value, stats.seconds_to_first_epi);
+        summary_stat("First epi", value, CR_THEME_MED);
+    }
+    if (stats.has_rosc) {
+        cr_format_offset(value, sizeof value, stats.seconds_to_rosc);
+        summary_stat("ROSC", value, CR_THEME_ROSC);
+    }
+
+    if (stats.med_count > 0) {
+        summary_line("MEDS GIVEN", CR_THEME_TEXT_DIM, &cr_font_16);
+        for (uint8_t i = 0; i < stats.med_count; i++) {
+            snprintf(line, sizeof line, "%s  ×%d", stats.meds[i].title,
+                     (int)stats.meds[i].count);
+            summary_line(line, CR_THEME_TEXT, &cr_font_28);
+        }
+    }
+
+    // The log, oldest first: a debrief is read forwards, unlike the live log
+    // where you are checking what just happened.
+    snprintf(line, sizeof line, "EVENT LOG · %d", (int)s->event_count);
+    summary_line(line, CR_THEME_TEXT_DIM, &cr_font_16);
+    for (uint16_t i = 0; i < s->event_count; i++) {
+        const cr_event_t *ev = &s->events[i];
+        char stamp[16];
+        cr_format_offset(stamp, sizeof stamp, ev->offset_s);
+        snprintf(line, sizeof line, "%s  %s%s%s", stamp, ev->title,
+                 ev->detail[0] ? " — " : "", ev->detail);
+        summary_line(line, cr_event_tint(ev), &cr_font_16);
+    }
+
+    if (engine->overflow) {
+        summary_line("LOG FULL — later events were not recorded", CR_THEME_MED, &cr_font_16);
+    }
+    summary_line("Demo — not a medical device. Full timeline + PDF on iPhone.",
+                 CR_THEME_TEXT_DIM, &cr_font_16);
+}
+
+static void build_summary(void)
+{
+    summary_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(summary_screen, lv_color_hex(CR_THEME_BG), 0);
+    lv_obj_remove_flag(summary_screen, LV_OBJ_FLAG_SCROLLABLE);
+    cr_probe_name(summary_screen, "summary");
+
+    summary_banner = lv_obj_create(summary_screen);
+    lv_obj_set_size(summary_banner, 300, 62);
+    lv_obj_set_pos(summary_banner, 55, 50);
+    lv_obj_set_style_radius(summary_banner, 20, 0);
+    lv_obj_set_style_border_width(summary_banner, 0, 0);
+    lv_obj_set_style_pad_all(summary_banner, 0, 0);
+    lv_obj_remove_flag(summary_banner, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(summary_banner, LV_OBJ_FLAG_CLICKABLE);
+    cr_probe_name(summary_banner, "summary.banner");
+    summary_banner_label = lv_label_create(summary_banner);
+    lv_obj_set_style_text_font(summary_banner_label, &cr_font_28, 0);
+    lv_label_set_text(summary_banner_label, "CODE ENDED");
+    lv_obj_center(summary_banner_label);
+
+    // Narrower than the glass because the corners are curved, and scrolling:
+    // a long code's log does not fit and must not be truncated.
+    summary_list = lv_obj_create(summary_screen);
+    lv_obj_set_size(summary_list, 340, 284);
+    lv_obj_set_pos(summary_list, 35, 122);
+    lv_obj_set_style_bg_opa(summary_list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(summary_list, 0, 0);
+    lv_obj_set_style_pad_all(summary_list, 0, 0);
+    lv_obj_set_style_pad_row(summary_list, 6, 0);
+    lv_obj_set_flex_flow(summary_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(summary_list, LV_DIR_VER);
+    cr_probe_name(summary_list, "summary.list");
+
+    // Lifted clear of the bottom band, which this panel does not show in full
+    // (the same reason the live screen's BOTTOM_LIFT exists).
+    lv_obj_t *done = button_at(summary_screen, 105, 414, 200, 56, CR_THEME_CPR,
+                               on_home, NULL, "summary.done");
+    lv_obj_t *done_label = lv_label_create(done);
+    lv_label_set_text(done_label, "DONE");
+    lv_obj_set_style_text_color(done_label, lv_color_hex(CR_THEME_CPR), 0);
+    lv_obj_set_style_text_font(done_label, &cr_font_28, 0);
+    lv_obj_center(done_label);
+}
+
+void ui_flow_show_summary(void)
+{
+    refresh_summary();
+    load_screen(summary_screen);
+    // The live screen's controls were proven at boot; these were not, and the
+    // list is built from the session rather than from the table. Dump it once
+    // so the debrief is measured too.
+    static bool dumped;
+    if (!dumped) {
+        dumped = true;
+        cr_probe_dump(summary_screen, "summary layout");
+    }
+}
+
 // MARK: - Home
 
 static void build_home(void)
@@ -653,6 +829,7 @@ void ui_flow_create(cr_engine_t *e, cr_ms_t (*clock)(void))
     engine = e;
     clock_ms = clock;
     build_home();
+    build_summary();
     build_weight();
     build_confirm();
     build_protocols();

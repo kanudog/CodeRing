@@ -31,6 +31,13 @@ void cr_format_offset(char *buf, size_t cap, int32_t seconds);
 /// 0.80 → "0.8", 16.0 → "16", 0.08 → "0.08" (DoseCalculator.trim).
 void cr_format_trim(char *buf, size_t cap, double value);
 
+/// A 0…1 fraction as a whole percent: 0.834 → "83%"
+/// (SessionStats.cprFractionPercent). Lives here rather than in the summary
+/// screen so the panel, the preview and the trauma-bay TV all round the CPR
+/// fraction the same way — a debrief number that differs per device is worse
+/// than no number.
+void cr_format_percent(char *buf, size_t cap, double fraction);
+
 /// Gutter-chip shorthand: known clinical abbreviations first ("EPI"), then
 /// short first words said whole ("BLOOD"), else the first three letters.
 /// Swift's unused `key:` parameter is dropped. Case-folding is ASCII-only,

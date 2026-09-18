@@ -16,10 +16,17 @@ set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 firmware=$(dirname "$here")
-ttf="$firmware/managed_components/lvgl__lvgl/scripts/built_in_font/Montserrat-Medium.ttf"
+fontdir="$firmware/managed_components/lvgl__lvgl/scripts/built_in_font"
+ttf="$fontdir/Montserrat-Medium.ttf"
+# Montserrat has no check mark, and the debrief needs one ("Rhythm ✓"). DejaVu
+# ships in the same LVGL component and does, so that one glyph comes from it —
+# which is what lv_font_conv's multiple --font arguments are for. Its metrics
+# differ slightly from Montserrat's; for a single tick that is invisible.
+dejavu="$fontdir/DejaVuSans.ttf"
 out="$firmware/main/fonts"
 
 [ -f "$ttf" ] || { echo "Montserrat not found — run a build first so the LVGL component is fetched"; exit 1; }
+[ -f "$dejavu" ] || { echo "DejaVuSans not found beside Montserrat in $fontdir"; exit 1; }
 mkdir -p "$out"
 
 # ASCII plus every non-ASCII character the app actually prints:
@@ -31,10 +38,13 @@ mkdir -p "$out"
 #   ×  times        "may repeat ×2"
 #   …  ellipsis     placeholder text
 #   ✕  exit pad glyph, ≤ ≥ ° • for headroom
+# and, from DejaVu because Montserrat lacks it:
+#   ✓  check mark    the debrief's "Rhythm ✓" tile
 #
 # Given as code points, not as literal characters: npm refuses an argument
 # that begins with an em dash, and silently drops it.
 EXTRA='0x2014,0x2013,0x00B7,0x2022,0x00D7,0x2192,0x2026,0x2264,0x2265,0x00B0,0x2082'
+CHECK='0x2713'
 
 for size in 16 28 48; do
     echo "  font ${size}px"
@@ -48,6 +58,8 @@ for size in 16 28 48; do
         --lv-font-name "cr_font_$size" \
         -r 0x20-0x7F \
         -r "$EXTRA" \
+        --font "$dejavu" \
+        -r "$CHECK" \
         -o "$out/cr_font_$size.c"
 
     # lv_font_conv stamps its full command line into the file, absolute
@@ -82,7 +94,8 @@ for m in re.finditer(r'\.range_start = (\d+), \.range_length = (\d+), \.glyph_id
         covered.update(start + off for off in lists.get(name, []))
 
 need = {0x2014: 'em dash', 0x2013: 'en dash', 0x00B7: 'middot',
-        0x00D7: 'times', 0x2192: 'arrow', 0x2082: 'subscript 2'}
+        0x00D7: 'times', 0x2192: 'arrow', 0x2082: 'subscript 2',
+        0x2713: 'check mark'}
 missing = [f"U+{cp:04X} ({label})" for cp, label in need.items() if cp not in covered]
 if missing:
     sys.exit("FAILED — missing from the font: " + ", ".join(missing))

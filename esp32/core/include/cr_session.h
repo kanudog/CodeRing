@@ -113,6 +113,14 @@ typedef struct {
 
 void cr_session_stats(const cr_session_t *s, cr_ms_t now, cr_stats_t *out);
 
+/// The NEWEST medication whose title contains `needle`, case-folded; NULL
+/// when there is none. This is how the handoff card answers "last epi — how
+/// long ago", and it matches the watch by searching the NAME rather than the
+/// drug id, so a custom adrenaline entry counts as epi exactly as it already
+/// does in the stats tally. ASCII folding only, which covers every built-in
+/// name. The pointer is into the session's own storage.
+const cr_event_t *cr_session_last_med_named(const cr_session_t *s, const char *needle);
+
 /// One med-timer chip: the drugs, shocks and fluids already given, each with
 /// how many times and how long since the last one. These ride around the
 /// ring on the live screen.

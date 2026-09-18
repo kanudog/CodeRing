@@ -80,6 +80,10 @@ Size on the target: **30 KB of code**, one 96 KB session struct (512 events,
 cd esp32/firmware && idf.py -p /dev/cu.usbmodem101 flash monitor
 ```
 
+The port number is assigned by the Mac, not by the board — it came up as
+`/dev/cu.usbmodem1101` on 2026-09-18. Check `ls /dev/cu.*` rather than
+trusting the number above.
+
 `firmware/` is an ESP-IDF project; `core/` is pulled in as a component, so
 the firmware and the host tests compile the **same** engine sources.
 
@@ -89,13 +93,22 @@ Two tools worth knowing:
   coordinates of every touch. The watch build was verified by dumping real
   frame coordinates rather than by looking at screenshots; M3's layout gets
   checked the same way. (It must call `lv_obj_update_layout()` first —
-  without it LVGL reports every object as 0×0.)
+  without it LVGL reports every object as 0×0.) It dumps at boot, and again
+  the first time a ROSC happens and the first time the debrief opens, because
+  a screen that is hidden at boot has coordinates but no content: the boot
+  dump proves where the ROSC stack WOULD land, not what a real pulse-found put
+  on the glass. That second dump is what caught a toast 613 px wide on a
+  410 px panel.
 - **`tools/make_fonts.sh`** regenerates the app's fonts. LVGL's built-ins
   are ASCII-only, so "Hands off — checking pulse" drew a box where the dash
   belongs. Changing the strings was not an option — they must stay
   byte-identical to the watch — so the font carries `— – · → × ₂` instead.
   The script verifies the glyphs are present, because a missing one fails
-  silently as an empty box.
+  silently as an empty box. `✓` (the debrief's "Rhythm ✓") is the one glyph
+  Montserrat does not have at all, so it is taken from DejaVu, which ships in
+  the same LVGL component — that is what `lv_font_conv`'s second `--font` is
+  for. Adding a character to a string means running this script, not editing
+  the string.
 
 ## Watch the engine in a browser
 
@@ -138,20 +151,35 @@ Read off the unit itself with esptool, not from the datasheet:
   estimate), the live session, the event log, the timers list, and the
   hands-off pulse check. 13 of the 16 deferred layout tests are now ported;
   the other 3 are the superseded anchor-bloom cascade.
-- **NEXT — ending a code, and ROSC.** Two screens the live session still
-  lacks:
-  - The flag button ends the code: a confirmation, then a handoff summary —
-    total time, CPR fraction, every drug with its count, the event log.
-    `cr_session_stats` and `cr_engine_end` already do the maths and are
-    tested; this is a screen, not new logic.
-  - The ROSC screen after a pulse is found. **Its layout is already
-    ported**: `cr_screen.vitals_ring`, `.vitals_label`, `.vitals_count`,
-    `.rosc_elapsed`, `.vitals_prompt`, `.re_arrest` and `.handoff` are in
-    the generated table and currently unused. The engine side
-    (`cr_engine_vitals_remaining`, `confirm_vitals`, `re_arrest`) is tested
-    too. Watch reference: `WatchApp/LiveSessionView.swift` around the ROSC
-    and end-of-code sections.
-- **M4** — audio: the metronome (already audio-only on the watch) and the
+- **M3b — ending a code, and ROSC, done** (on the watch, 2026-09-18). The two
+  outcomes the live session lacked. Both are screens: the maths was already
+  written and tested, and no engine rule changed — `make parity` is still
+  byte-identical on all 72 trace lines.
+  - **The flag ends the code.** Red, as on the watch, behind an `END CODE?`
+    confirmation, because it is the only door out of a running code and there
+    is no un-end. Then the debrief, which lives in `ui_flow.c` for the same
+    reason `WatchRootView` owns `SummaryView` and not `LiveSessionView`: it is
+    terminal, and DONE goes home rather than back into a finished code.
+    Duration, CPR percent, epi, shocks, rhythm checks, pauses, time to first
+    epi and to ROSC, every drug with its count, then the whole log.
+  - **The ROSC screen**, from the table's own `vitals_ring`, `.vitals_label`,
+    `.vitals_count`, `.rosc_elapsed`, `.vitals_prompt`, `.re_arrest`,
+    `.handoff` and `.rosc_heart`. The ring is the vitals-confirmed target
+    exactly as it is the pulse-check target during the arrest — the table puts
+    both rings on one centre and diameter, so the same hit disc serves both and
+    the eye does not move when the outcome changes. HANDOFF opens the watch's
+    phone-call card as a third mode of the existing log/timers overlay, since
+    it is the same read-only list shape.
+  - Two derived numbers went into `core/` rather than into a screen, so the
+    panel, the preview and the TV round them identically: `cr_format_percent`
+    (`SessionStats.cprFractionPercent`) and `cr_session_last_med_named`, which
+    answers "last epi, how long ago" by NAME rather than by drug id — the same
+    predicate the stats tally already uses, so a custom adrenaline entry counts.
+  - The fonts gained `✓` for the debrief's "Rhythm ✓" tile. Montserrat has no
+    check mark, so that one glyph comes from DejaVu, which ships in the same
+    LVGL component. Changing the label was not an option; the font is what
+    changes (see `tools/make_fonts.sh`).
+- **NEXT — M4, audio:** the metronome (already audio-only on the watch) and the
   cue model that replaces haptics. The I2C scan confirms an ES8311 codec at
   0x18 and an ES7210 mic ADC at 0x40 — and **no haptic driver at 0x5A**, so
   the tick felt on a tap is the speaker or the panel, not a motor.
@@ -179,6 +207,17 @@ Worth knowing before adding screens, because none of these fail a test:
 - **Labels clip if given the table's box height**, because those are watchOS
   point sizes and the rasterised font is taller. `place_label()` sizes a
   label to its own text and re-centres it when the text changes width.
+- **…but a label sized to its own text needs a MAXIMUM.** The watch shrinks
+  text to fit its box (`minimumScaleFactor`); LVGL cannot, so an unbounded
+  label just grows. The longest string the live screen shows is a refusal, and
+  "NOTHING LOGGED — pulse check not due" measured 613 px on a 410 px panel and
+  hung 100 px off both edges. `toast()` now wraps inside the table's box once
+  the text exceeds it, and keeps the snug pill when it does not.
+- **A control hidden for one state must be restored for the other.** Hiding is
+  the CPR ring's only state, and nothing had ever needed to hide it before
+  ROSC existed — so a re-arrest came back to a bare countdown with no ring
+  around it. Everything else on that screen sets its visibility both ways
+  every frame; anything that does not needs an explicit `else`.
 
 ## Two Swift quirks carried over on purpose
 
