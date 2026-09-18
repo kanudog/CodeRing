@@ -38,6 +38,13 @@ static const float cr_font_16_px = 16.0f;
 /// number that decides how much of each corner is unusable.
 #define CORNER_RADIUS 110.0f
 
+/// Fan captions sit this much lower than the table puts them. The table's
+/// label gap is the watch's, and this board's rasterised font is taller than
+/// the watchOS one it was measured against, so the caption crowded its own
+/// bubble. A device adjustment, like BOTTOM_LIFT — the table still holds
+/// Sebastian's coordinates.
+#define LABEL_DROP 7.0f
+
 static cr_pt_t corner_safe(cr_pt_t c, float w, float h)
 {
     const float hw = w / 2 + 2, hh = h / 2 + 2;     // +2 so it never kisses the edge
@@ -98,8 +105,15 @@ static struct {
 } live;
 
 /// The end-of-code confirmation. Hidden until the flag is tapped.
+///
+/// It asks the OUTCOME, not just "are you sure". Ending is the one moment the
+/// record can still be told whether a pulse came back, and a code that ends
+/// without that is a code whose summary cannot answer the first question
+/// anyone asks about it.
 static struct {
     lv_obj_t *root;
+    lv_obj_t *rosc_button;      // hidden when ROSC is already on the record
+    lv_obj_t *title, *note, *end_label;
 } confirm;
 
 static struct {
@@ -408,8 +422,22 @@ static void fan_build(const char *key)
         lv_label_set_text(label, item->title);
         lv_obj_set_style_text_color(label, lv_color_hex(CR_THEME_TEXT), 0);
         lv_obj_set_style_text_font(label, font_for(slots[i].label_font), 0);
+        // The label box was twice the table's height, and LVGL renders text at
+        // the TOP of a box rather than centred in it — so every caption drew
+        // about half a box HIGH and sat on the bubble above it. Size to the
+        // text and centre on the table's point, which is what the point meant.
         lv_obj_set_width(label, (int32_t)slots[i].label_width);
-        place(label, slots[i].label, slots[i].label_width, cr_arc.label_box_height * 2);
+        lv_obj_set_height(label, LV_SIZE_CONTENT);
+        lv_obj_update_layout(label);
+        const float lw = (float)lv_obj_get_width(label);
+        const float lh = (float)lv_obj_get_height(label);
+        // …and then a few pixels lower still. The table's gap is the watch's,
+        // measured against a font that rasterises shorter than this one; a
+        // caption touching its own button reads as part of it.
+        const cr_pt_t at = { slots[i].label.x, slots[i].label.y + LABEL_DROP };
+        lv_obj_set_pos(label, (int32_t)(at.x - lw / 2 + 0.5f),
+                              (int32_t)(at.y - lh / 2 + 0.5f));
+        cr_probe_expect(label, at.x, at.y);
     }
 
     // Back exists only below the root — exiting is one learned reach either way.
@@ -750,12 +778,27 @@ static void on_handoff(lv_event_t *event)
     sheet_open(SHEET_HANDOFF);
 }
 
+static void on_confirm_end(lv_event_t *event);
+
 /// The flag asks first. Every other control on this screen either logs
 /// something undoable or changes a clock; this one is the only door out of a
 /// running code, and there is no un-end.
 static void on_flag(lv_event_t *event)
 {
     (void)event;
+    // Two different questions. Before ROSC the flag asks what the OUTCOME was,
+    // and answering "a pulse" carries on rather than stopping. Once ROSC is on
+    // the record there is only one thing left to ask.
+    const bool rosc = engine->rosc_achieved;
+    if (rosc) lv_obj_add_flag(confirm.rosc_button, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_remove_flag(confirm.rosc_button, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(confirm.title, rosc ? "END CODE?" : "OUTCOME?");
+    lv_label_set_text(confirm.note, rosc ? "the clocks stop — the record stays"
+                                         : "was a pulse found?");
+    lv_label_set_text(confirm.end_label, rosc ? "END CODE" : "END — NO ROSC");
+    recentre(confirm.title, (cr_pt_t){ cr_screen.width / 2, 140 });
+    recentre(confirm.note, (cr_pt_t){ cr_screen.width / 2, 178 });
+    lv_obj_center(confirm.end_label);
     lv_obj_remove_flag(confirm.root, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(confirm.root);
 }
@@ -764,6 +807,17 @@ static void on_confirm_cancel(lv_event_t *event)
 {
     (void)event;
     lv_obj_add_flag(confirm.root, LV_OBJ_FLAG_HIDDEN);
+}
+
+/// A pulse is back. This does NOT end the code — it marks ROSC and returns to
+/// the live screen, which becomes the ROSC screen: the vitals cadence starts
+/// counting, RE-ARREST and HANDOFF appear, and the code carries on. Ending is
+/// a second, deliberate decision, taken from there.
+static void on_confirm_rosc(lv_event_t *event)
+{
+    (void)event;
+    lv_obj_add_flag(confirm.root, LV_OBJ_FLAG_HIDDEN);
+    report(cr_engine_mark_rosc(engine, clock_ms()), "ROSC");
 }
 
 static void on_confirm_end(lv_event_t *event)
@@ -1040,9 +1094,22 @@ void ui_create(cr_engine_t *e, cr_ms_t (*clock)(void))
         cr_probe_name(live.rosc_heart, "rosc.heart");
     }
 
-    live.re_arrest = make_capsule(screen, &cr_screen.re_arrest, "RE-ARREST",
+    // Spread down the right column, and taller than the table asks.
+    //
+    // The table stacks the flag, RE-ARREST and HANDOFF with 4 and 6 px between
+    // them — the watch's spacing, on a watch-sized finger target. Here they are
+    // three controls with very different consequences: hitting RE-ARREST when
+    // you meant HANDOFF restarts compressions on a patient who has a pulse.
+    // The room comes from the two trailing med chips, which ui_tick hides while
+    // in ROSC: after a pulse is back, these two matter more than two more chips,
+    // and everything given is still in the timers sheet.
+    const cr_text_t rearrest_at = { { cr_screen.re_arrest.center.x, 200.0f },
+                                    cr_screen.re_arrest.w, 64.0f, cr_screen.re_arrest.font };
+    const cr_text_t handoff_at  = { { cr_screen.handoff.center.x, 292.0f },
+                                    cr_screen.handoff.w, 64.0f, cr_screen.handoff.font };
+    live.re_arrest = make_capsule(screen, &rearrest_at, "RE-ARREST",
                                   CR_THEME_MED, CR_THEME_BG, on_re_arrest, "btn.rearrest");
-    live.handoff = make_capsule(screen, &cr_screen.handoff, "HANDOFF",
+    live.handoff = make_capsule(screen, &handoff_at, "HANDOFF",
                                 CR_THEME_SURFACE_HI, CR_THEME_ROSC, on_handoff, "btn.handoff");
 
     lv_obj_t *const rosc_parts[] = { live.rosc_elapsed, live.vitals_label, live.vitals_count,
@@ -1106,18 +1173,28 @@ void ui_create(cr_engine_t *e, cr_ms_t (*clock)(void))
     lv_obj_add_flag(confirm.root, LV_OBJ_FLAG_HIDDEN);
     cr_probe_name(confirm.root, "confirm.root");
 
-    lv_obj_t *confirm_title = make_label(confirm.root, "END CODE?", CR_THEME_TEXT, 33.0f);
-    place_label(confirm_title, (cr_pt_t){ cr_screen.width / 2, 168 });
-    cr_probe_name(confirm_title, "confirm.title");
-    lv_obj_t *confirm_note = make_label(confirm.root, "the clocks stop — the record stays",
-                                        CR_THEME_TEXT_DIM, cr_font_16_px);
-    place_label(confirm_note, (cr_pt_t){ cr_screen.width / 2, 214 });
-    cr_probe_name(confirm_note, "confirm.note");
+    confirm.title = make_label(confirm.root, "OUTCOME?", CR_THEME_TEXT, 33.0f);
+    place_label(confirm.title, (cr_pt_t){ cr_screen.width / 2, 140 });
+    cr_probe_name(confirm.title, "confirm.title");
+    confirm.note = make_label(confirm.root, "was a pulse found?", CR_THEME_TEXT_DIM,
+                              cr_font_16_px);
+    place_label(confirm.note, (cr_pt_t){ cr_screen.width / 2, 178 });
+    cr_probe_name(confirm.note, "confirm.note");
 
-    const cr_text_t end_spec = { { cr_screen.width / 2, 292.0f }, 288.0f, 66.0f, 22.0f };
-    const cr_text_t cancel_spec = { { cr_screen.width / 2, 376.0f }, 224.0f, 58.0f, 20.0f };
-    make_capsule(confirm.root, &end_spec, "END & REVIEW", CR_THEME_MED, CR_THEME_BG,
-                 on_confirm_end, "confirm.end");
+    // Big, and far apart. These three are pressed once, at the end, often by
+    // someone who has been running a code for twenty minutes — and choosing
+    // the wrong one writes the wrong outcome into the record. 70 px tall with
+    // 16 px between them, rather than the 58 and 4 that fitted.
+    const cr_text_t rosc_spec   = { { cr_screen.width / 2, 232.0f }, 300.0f, 70.0f, 22.0f };
+    const cr_text_t end_spec    = { { cr_screen.width / 2, 318.0f }, 300.0f, 70.0f, 22.0f };
+    const cr_text_t cancel_spec = { { cr_screen.width / 2, 404.0f }, 240.0f, 62.0f, 20.0f };
+    confirm.rosc_button = make_capsule(confirm.root, &rosc_spec, "ROSC ACHIEVED",
+                                       CR_THEME_ROSC, CR_THEME_BG,
+                                       on_confirm_rosc, "confirm.rosc");
+    lv_obj_t *end_button = make_capsule(confirm.root, &end_spec, "END — NO ROSC",
+                                        CR_THEME_MED, CR_THEME_BG,
+                                        on_confirm_end, "confirm.end");
+    confirm.end_label = lv_obj_get_child(end_button, 0);
     make_capsule(confirm.root, &cancel_spec, "CANCEL", CR_THEME_SURFACE_HI, CR_THEME_TEXT,
                  on_confirm_cancel, "confirm.cancel");
 }
@@ -1325,7 +1402,10 @@ void ui_tick(void)
                                              cr_screen.chip_count < 6 ? cr_screen.chip_count : 6);
     for (uint8_t i = 0; i < cr_screen.chip_count && i < 6; i++) {
         if (live.chips[i].root == NULL) continue;
-        if (i >= chip_count) {
+        // The two trailing chips share the right column with RE-ARREST and
+        // HANDOFF. Post-ROSC that column belongs to those two, so these stand
+        // down — the timers sheet still has everything.
+        if (i >= chip_count || (rosc && i >= 4)) {
             lv_obj_add_flag(live.chips[i].root, LV_OBJ_FLAG_HIDDEN);
             continue;
         }

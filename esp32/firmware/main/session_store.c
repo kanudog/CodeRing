@@ -189,3 +189,33 @@ bool store_load(const char *name, cr_session_t *out)
     }
     return true;
 }
+
+size_t store_clear(void)
+{
+    if (!mounted) return 0;
+    size_t removed = 0;
+    // Re-opened each pass: deleting while walking a directory is not defined
+    // to be safe, and this runs once, on a handful of files.
+    for (;;) {
+        DIR *dir = opendir(MOUNT);
+        if (dir == NULL) return removed;
+        char victim[32] = "";
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            const size_t len = strlen(entry->d_name);
+            if (len >= sizeof victim) continue;
+            if (strstr(entry->d_name, ".crs") == NULL) continue;
+            memcpy(victim, entry->d_name, len + 1);
+            break;
+        }
+        closedir(dir);
+        if (victim[0] == '\0') break;
+
+        char path[64];
+        snprintf(path, sizeof path, MOUNT "/%s", victim);
+        if (unlink(path) != 0) break;       // stop rather than spin
+        removed++;
+    }
+    ESP_LOGW(TAG, "cleared %u saved codes", (unsigned)removed);
+    return removed;
+}

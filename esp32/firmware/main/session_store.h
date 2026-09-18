@@ -43,3 +43,7 @@ bool store_save(const cr_session_t *session);
 size_t store_list(store_entry_t *out, size_t cap);
 
 bool store_load(const char *name, cr_session_t *out);
+
+/// Deletes every saved code. Irreversible and unsynced — nothing else holds a
+/// copy — so the caller must have asked first. Returns how many it removed.
+size_t store_clear(void);

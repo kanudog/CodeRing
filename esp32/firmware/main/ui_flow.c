@@ -67,6 +67,11 @@ EXT_RAM_BSS_ATTR static cr_session_t loaded_session;
 
 static void show_recents(void);
 static void on_summary_done(lv_event_t *event);
+
+/// The clear-everything confirmation, on the Recents screen. Saved codes are
+/// the only copy — nothing syncs them anywhere — so this asks, for the same
+/// reason ending a code does.
+static lv_obj_t *wipe_confirm;
 static lv_obj_t *chip_protocol_value;
 static lv_obj_t *chip_weight_value;
 static lv_obj_t *chip_age_value;
@@ -150,7 +155,20 @@ static const char *TAG = "flow";
 /// Switching screens from inside a button's own handler leaves the input
 /// device latched on the button that was pressed — it no longer belongs to
 /// the visible screen, so every later touch is routed nowhere and the new
-/// screen looks dead. Release the touch first, then swap.
+/// screen looks dead. The input device has to be made to forget that object.
+///
+/// It must be lv_indev_reset, NOT lv_indev_wait_release. wait_release is for a
+/// finger that is still DOWN, and LV_EVENT_CLICKED fires on RELEASE — so it
+/// always latched, and LVGL spends the whole of the next press clearing the
+/// flag:
+///
+///     if (indev->wait_until_release) { act_obj = NULL; wait_until_release = 0; }
+///     indev_obj_act = indev->pointer.act_obj;    // NULL — that press does nothing
+///
+/// Every button on every screen therefore needed two taps, and only the first
+/// tap after boot worked, because nothing had swapped a screen yet. Measured on
+/// the wrist: the touch log showed a DOWN/UP landing on the right coordinates
+/// and no handler firing, then an identical one that worked.
 /// What is left to draw with. The display's SPI transfers need DMA-capable
 /// INTERNAL memory, and when that runs out the panel does not crash — it
 /// simply stops flushing, leaving bands of the previous screen on the glass.
@@ -168,7 +186,7 @@ static void log_heap(const char *where)
 static void load_screen(lv_obj_t *screen)
 {
     lv_indev_t *indev = lv_indev_active();
-    if (indev != NULL) lv_indev_wait_release(indev);
+    if (indev != NULL) lv_indev_reset(indev, NULL);
     lv_screen_load(screen);
     const char *name = lv_obj_get_user_data(screen);
     log_heap(name != NULL ? name : "screen");
@@ -970,11 +988,15 @@ static void refresh_settings(void)
     }
 
     // These two store a preference that nothing plays yet: there is no audio
-    // path until M4. Saying so beats a toggle that looks live and is not.
-    settings_row("Alert tones (M4)", settings.cues_enabled ? "on" : "off",
-                 CR_THEME_TEXT_DIM, on_toggle_cues, NULL, "set.cues");
-    settings_row("Metronome (M4)", settings.metronome_sound_on ? "on" : "off",
-                 CR_THEME_TEXT_DIM, on_toggle_sound, NULL, "set.sound");
+    // path until M4. The LABEL carries that; the value reads like every other
+    // row, because a switch that spells its state differently from its
+    // neighbours is a worse problem than one that is waiting on a milestone.
+    settings_row("Alert tones (M4)", settings.cues_enabled ? "ON" : "OFF",
+                 settings.cues_enabled ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
+                 on_toggle_cues, NULL, "set.cues");
+    settings_row("Metronome (M4)", settings.metronome_sound_on ? "ON" : "OFF",
+                 settings.metronome_sound_on ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
+                 on_toggle_sound, NULL, "set.sound");
     settings_row("Keep screen on", settings.keep_screen_on ? "ON" : "OFF",
                  settings.keep_screen_on ? CR_THEME_ROSC : CR_THEME_TEXT_DIM,
                  on_toggle_screen, NULL, "set.screen");
@@ -1122,9 +1144,32 @@ static void refresh_recents(void)
     }
 }
 
+static void on_wipe_ask(lv_event_t *event)
+{
+    (void)event;
+    lv_obj_remove_flag(wipe_confirm, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(wipe_confirm);
+}
+
+static void on_wipe_cancel(lv_event_t *event)
+{
+    (void)event;
+    lv_obj_add_flag(wipe_confirm, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void on_wipe_confirm(lv_event_t *event)
+{
+    (void)event;
+    const size_t gone = store_clear();
+    ESP_LOGW(TAG, "recents cleared by the user (%u)", (unsigned)gone);
+    lv_obj_add_flag(wipe_confirm, LV_OBJ_FLAG_HIDDEN);
+    refresh_recents();
+}
+
 static void show_recents(void)
 {
     refresh_recents();
+    lv_obj_add_flag(wipe_confirm, LV_OBJ_FLAG_HIDDEN);   // never open on arrival
     load_screen(recents_screen);
 }
 
@@ -1157,13 +1202,57 @@ static void build_recents(void)
     recents_empty = label_at(recents_screen, "", CR_THEME_TEXT_DIM, &cr_font_16, 0, 200, 410);
     lv_obj_add_flag(recents_empty, LV_OBJ_FLAG_HIDDEN);
 
-    lv_obj_t *back = button_at(recents_screen, 105, 414, 200, 56, CR_THEME_TEXT_DIM,
+    lv_obj_t *back = button_at(recents_screen, 30, 414, 178, 56, CR_THEME_TEXT_DIM,
                                on_home, NULL, "recents.back");
     lv_obj_t *back_label = lv_label_create(back);
     lv_label_set_text(back_label, "BACK");
     lv_obj_set_style_text_color(back_label, lv_color_hex(CR_THEME_TEXT), 0);
     lv_obj_set_style_text_font(back_label, &cr_font_28, 0);
     lv_obj_center(back_label);
+
+    // Deliberately the smaller of the two, and the dark-red of the exit pads
+    // rather than a menu colour: it must not read as the obvious thing to
+    // press on the way out.
+    lv_obj_t *wipe = button_at(recents_screen, 222, 414, 158, 56, CR_THEME_MED,
+                               on_wipe_ask, NULL, "recents.clear");
+    lv_obj_t *wipe_label = lv_label_create(wipe);
+    lv_label_set_text(wipe_label, "CLEAR");
+    lv_obj_set_style_text_color(wipe_label, lv_color_hex(CR_THEME_MED), 0);
+    lv_obj_set_style_text_font(wipe_label, &cr_font_16, 0);
+    lv_obj_center(wipe_label);
+
+    // The confirmation, built once and hidden.
+    wipe_confirm = lv_obj_create(recents_screen);
+    lv_obj_set_size(wipe_confirm, 410, 501);
+    lv_obj_set_pos(wipe_confirm, 0, 0);
+    lv_obj_set_style_bg_color(wipe_confirm, lv_color_hex(CR_THEME_BG), 0);
+    lv_obj_set_style_bg_opa(wipe_confirm, LV_OPA_90, 0);
+    lv_obj_set_style_border_width(wipe_confirm, 0, 0);
+    lv_obj_set_style_radius(wipe_confirm, 0, 0);
+    lv_obj_remove_flag(wipe_confirm, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(wipe_confirm, LV_OBJ_FLAG_HIDDEN);
+    cr_probe_name(wipe_confirm, "recents.wipe");
+
+    label_at(wipe_confirm, "DELETE ALL CODES?", CR_THEME_TEXT, &cr_font_28, 0, 150, 410);
+    label_at(wipe_confirm, "this is the only copy —\nnothing syncs them anywhere",
+             CR_THEME_TEXT_DIM, &cr_font_16, 0, 196, 410);
+
+    lv_obj_t *yes = button_at(wipe_confirm, 55, 268, 300, 70, CR_THEME_MED,
+                              on_wipe_confirm, NULL, "wipe.yes");
+    lv_obj_set_style_bg_color(yes, lv_color_hex(CR_THEME_MED), 0);
+    lv_obj_t *yes_label = lv_label_create(yes);
+    lv_label_set_text(yes_label, "DELETE ALL");
+    lv_obj_set_style_text_color(yes_label, lv_color_hex(CR_THEME_BG), 0);
+    lv_obj_set_style_text_font(yes_label, &cr_font_28, 0);
+    lv_obj_center(yes_label);
+
+    lv_obj_t *no = button_at(wipe_confirm, 85, 360, 240, 62, CR_THEME_TEXT_DIM,
+                             on_wipe_cancel, NULL, "wipe.no");
+    lv_obj_t *no_label = lv_label_create(no);
+    lv_label_set_text(no_label, "KEEP THEM");
+    lv_obj_set_style_text_color(no_label, lv_color_hex(CR_THEME_TEXT), 0);
+    lv_obj_set_style_text_font(no_label, &cr_font_28, 0);
+    lv_obj_center(no_label);
 }
 
 // MARK: - Home

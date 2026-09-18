@@ -193,7 +193,14 @@ Worth knowing before adding screens, because none of these fail a test:
 - **LVGL latches the input device on the object you pressed.** Swapping
   screens inside that button's own handler leaves every later touch routed
   to an invisible object, and the new screen looks completely dead. Use
-  `load_screen()` in ui_flow.c, which releases the touch first.
+  `load_screen()` in ui_flow.c, which makes the input device forget it.
+  It must call **`lv_indev_reset`, not `lv_indev_wait_release`** — the
+  latter is for a finger still DOWN, and `LV_EVENT_CLICKED` fires on
+  RELEASE, so it always latched and LVGL then spent the whole of the next
+  press clearing the flag. Every button on every screen needed two taps, and
+  only the first tap after boot worked because nothing had swapped a screen
+  yet. The touch log is what found it: a DOWN/UP on the right coordinates
+  with no handler firing, then an identical one that worked.
 - **LVGL's built-in allocator is a fixed 64 kB pool.** The six screens need
   ~156 kB, and the overflow crashed inside glyph drawing — a white screen
   and a reboot loop. `CONFIG_LV_USE_CLIB_MALLOC=y` puts LVGL on the system
